@@ -16,6 +16,22 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
+# Install the x-client local runtime binaries from this checkout.
+x-install:
+    cargo install --path cli --locked --force --jobs 1
+    cargo install --path turn-start-bridge --locked --force --jobs 1
+
+# Sync/rebase/build/install/smoke/push the x-thin branch in a maintenance worktree.
+[no-cd]
+maintain-x-fork *args:
+    {{ justfile_directory() }}/scripts/maintain-x-thin.sh "$@"
+
+[no-cd]
+maintain-x-fork-setup *args:
+    {{ justfile_directory() }}/scripts/maintain-x-thin.sh --setup-only "$@"
+
+alias x-maintain := maintain-x-fork
+
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
 tui-with-exec-server *args:
