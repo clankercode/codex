@@ -8,6 +8,7 @@ members = [
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
+    "turn-start-bridge",
     "debug-client",
     "apply-patch",
     "arg0",
@@ -88,6 +89,7 @@ members = [
     "codex-api",
     "state",
     "terminal-detection",
+    "turn-start-bridge-core",
     "test-binary-support",
     "thread-store",
     "codex-experimental-api-macros",
@@ -114,6 +116,7 @@ codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
+codex-turn-start-bridge = { path = "turn-start-bridge" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
@@ -173,6 +176,7 @@ codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
+codex-turn-start-bridge-core = { path = "turn-start-bridge-core" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
