@@ -218,7 +218,7 @@ rebase_in_progress() {
 
 fetch_remote_refs() {
   log "Fetching remotes"
-  run git fetch "$UPSTREAM_REMOTE" "$MAIN_BRANCH"
+  run git fetch --tags "$UPSTREAM_REMOTE"
   run git fetch "$ORIGIN_REMOTE" "$TOPIC_BRANCH"
 }
 
