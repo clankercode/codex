@@ -1,6 +1,101 @@
-- [] allow injecting non-user messages
+- [] allow injecting non-user messages (assistant, system, etc)
 - [] stdout format and details (for thin)
 - [] support replacing system prompt later
 - [] tool call passthrough/externally registered (external MCP passthrough too?)
 - [] compact statusline for ctx etc
+- [] add easy single CLI flag to disable as much built-in context as possible. see this comment from ~/src/codename-thin implementing a wrapper around codex:
+
+• [...] but Codex exposes them mostly as -c config overrides rather than dedicated CLI
+  flags.
+
+  Implemented now:
+
+  - features.shell_tool=false
+  - features.apps=false
+  - features.plugins=false
+  - features.tool_search=false
+  - features.tool_suggest=false
+  - features.image_generation=false
+  - features.multi_agent=false
+  - features.memories=false
+  - features.skill_mcp_dependency_install=false
+  - skills.bundled.enabled=false
+  - project_doc_max_bytes=0
+  - include_apps_instructions=false
+  - include_permissions_instructions=false
+  - Cursor: --mode ask
+  - Cursor: new extra_args passthrough for any local CLI-specific knobs
+
+  Other knobs I found but did not implement because they either do not reduce prompt/context
+  much or are situational:
+
+  - hide_agent_reasoning=true: output/UI behavior, not really prompt/context reduction.
+  - model_context_window: metadata/limits, not a context reducer.
+  - model_auto_compact_token_limit: can reduce long-session growth, but it changes conversation
+    behavior and is not a first-turn savings knob.
+  - tool_output_token_limit: only matters after tool calls, and we’re disabling native tools by
+    default.
+  - web_search = ...: largely redundant with disabling app/search/tool features for this use.
+
+  One thing worth revisiting in the Codex fork: a first-class “text provider mode” or “disable
+  all model-visible tools” config would be better than a bundle of feature overrides. I didn’t
+  see one clean current flag, so Thin now applies the explicit lean set.
+
+
+- [ ] codename-thin coder agent wishlist. 
+
+Please see this response from the coder agent about the wishlist. 
+All paths are relative to ~/src/codename-thin/
+
+--- start ---
+
+Yes. The original wishlist you asked for is here:
+
+  - docs/superpowers/plans/2026-04-17-codex-cli-persistent-provider.md:578
+
+  That section includes 7 items:
+
+  1. codex-turn-start-bridge --output-format jsonl
+  2. Stable public Python/TypeScript app-server SDK
+  3. thread/injectMessages style typed message append API
+  4. Turn-scoped base-instructions update
+  5. First-class no-tool/no-shell mode
+  6. Structured usage/quota notifications
+  7. Lossless thread/read raw event replay
+
+  There’s also a later follow-up wishlist here:
+
+  - docs/codex-cli-adversarial-findings.md:146
+
+  That one adds more concrete fork-facing asks:
+
+  - capability introspection JSON
+  - stable error codes
+  - explicit timeout/cancellation semantics
+  - thread replay/import API
+  - event and usage capture contract
+  - SDK keyword stability
+
+  If you want the most actionable shortlist to hand to the Codex fork work, I’d
+  prioritize:
+
+  1. capability introspection
+  2. stable error codes
+  3. event/usage capture contract
+  4. thread replay/import API
+  5. first-class no-tool/no-shell mode
+
+--- end ---
+
+For this, assemble features into a matrix as columns with the rows as goals:
+- suitable for a codex fork
+- reasonable workload (not massive features)
+- low maintenance: can be implemented with minimal/reasonable touching of other code
+
+and list any other suitable goals you can think of. 
+for each feature, we only want to implement it now if we can meet all goals. 
+if it fails any goal, defer it till later.
+Insert the matrix in this file below. 
+
+** INSERT FEATURE MATRIX HERE **
 
