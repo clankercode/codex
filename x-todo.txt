@@ -1,0 +1,6 @@
+- [] allow injecting non-user messages
+- [] stdout format and details (for thin)
+- [] support replacing system prompt later
+- [] tool call passthrough/externally registered (external MCP passthrough too?)
+- [] compact statusline for ctx etc
+
