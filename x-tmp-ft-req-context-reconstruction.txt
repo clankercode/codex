@@ -1,0 +1,63 @@
+Context reconstruction request for codex fork
+
+(Note: please delete this task after it is fully complete, reviewed, and merged back to the x-thin branch.)
+
+Problem
+- Thin wants to run controlled experiments where provider-visible history is rewritten per turn.
+- Example modes:
+  1. full chat log
+  2. condensed game summary
+  3. state-only
+- This works naturally for stateless providers because the rewritten message list is the whole prompt.
+- It does not work cleanly for persistent Codex threads today.
+
+Why current behavior is insufficient
+- Thin's provider-codex-cli rewrites request.messages before send.
+- After the first turn, Codex thread reuse means the remote thread already contains prior native context.
+- Sending a rewritten compact snapshot as new input does not replace that old thread state; it only appends more content.
+- That makes experiments like summary/state-only semantically ambiguous and breaks controlled comparisons.
+
+Requested feature
+Need an explicit way to reconstruct or replace thread context from host-supplied messages.
+
+Any of these would solve it:
+1. thread.replaceMessages(messages, ...)
+   - replace the remote thread's conversation state with the supplied ordered messages
+   - then continue the session on the same thread id or a returned new thread id
+
+2. thread.forkFromMessages(messages, ...)
+   - create a new thread initialized from an explicit supplied transcript snapshot
+   - returns a new thread id
+   - old thread can remain untouched
+
+3. run(..., history_mode="replace", input_messages=[...])
+   - one-shot operation that tells Codex to discard prior thread conversation state for this turn and use the supplied snapshot as truth
+
+4. thread.importTranscript(messages, base_instructions=..., developer_instructions=..., metadata=...)
+   - explicit transcript import API with clear message typing
+
+Minimum contract needed
+- Accept ordered host-supplied messages with explicit roles
+- Preserve exact message boundaries rather than forcing a single concatenated input blob
+- Work with current XML input mode too; XML can still be the transport encoding, but the semantic operation must be 'replace/fork from supplied transcript'
+- Be deterministic about whether the old thread context is retained, replaced, or ignored
+- Return the effective thread id after reconstruction/fork
+- Error clearly if the operation is unsupported by the installed binary/SDK
+
+Strongly preferred extras
+- Capability introspection so Thin can detect support up front
+  - e.g. thread_capabilities: { replace_messages: true, fork_from_messages: true, import_transcript: false }
+- Stable error codes for unsupported operations
+- Event stream marker that indicates reconstruction/fork occurred
+- Optional metadata field so hosts can annotate why a reconstruction happened
+  - e.g. { history_mode: "summary", source: "thin" }
+
+Why this matters beyond chess
+- Hosts may want custom compaction or history shaping policies while still using long-lived Codex sessions.
+- Without thread reconstruction, any host-managed context policy conflicts with native persistent thread memory.
+- This blocks controlled evals and makes behavior hard to reason about.
+
+Interim Thin plan if this is not added soon
+- For Codex history-rewrite experiments, disable persistent thread reuse and use fresh threads per turn.
+- Keep persistent threads only for the normal full-history mode.
+- This is workable but loses one of the main advantages of the app-server path.
