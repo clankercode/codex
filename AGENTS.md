@@ -5,6 +5,9 @@ harness. This is geared around greater control of context, tooling, etc. The def
 branch for the fork is x-thin. Ideally the changes made by the fork are made so that
 pulling in changes from upstream do not cause git conflicts. 
 
+When developing features, you do not have to fully compile codex. Just running tests
+and `cargo check` over all relevant packages is enough. 
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:
