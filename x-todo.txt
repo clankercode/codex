@@ -114,3 +114,28 @@ Notes:
 - `stable error codes` and `structured usage/quota notifications` already have meaningful support in the fork, so they do not need net-new code in this pass.
 - `capability introspection JSON` looks plausible but still wants a cleaner contract than the current mix of feature/config endpoints.
 - `event and usage capture contract` and `lossless raw event replay` both cross enough boundaries that they miss the "reasonable workload" and "low maintenance" gates for a quick fork pass.
+
+---
+
+- [ ] our build of codex reports v0.0.0 which causes some problems. remove the special case for this in the test and update it to use the most recent actual version number in git history. 
+
+Sample demonstrating problem, starting codex:
+
+codename-thin master  ✗ codex
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                     │
+│                                              │
+│ model:     gpt-5.4 medium   /model to change │
+│ directory: ~/src/codename-thin               │
+╰──────────────────────────────────────────────╯
+
+  Tip: Update Required - This version will no longer be supported starting May 8th. Please upgrade to the latest ve
+  rsion (https://github.com/openai/codex/releases/latest) using your preferred package manager.
+
+---
+
+- [ ] support compacting using a lighter model. eg if we have been afk so LLM cache is cold, it is advantageous to compact using eg gpt-5.4-mini and then swap the model back to what it was so we can continue with lesser burden on state.
+- [ ] replicate ~/src/claude-inject-idle-time features, injection should be able to be enabled or disabled live (default on). also add status line option for idle time since last model turn. 
+- [ ] add `/effort [off|low|medium|high|xhigh]` command which can be used live (and during assistant's turn) to set the effort-level / thinking-level for the current session and model calls (should update immediately).
+
+
