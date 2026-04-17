@@ -30,6 +30,7 @@ pub struct ThreadSessionRequest {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    pub base_instructions: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -211,6 +212,7 @@ pub(crate) fn build_thread_request(
                 model_provider: None,
                 cwd,
                 approval_policy: request.approval_policy,
+                base_instructions: request.base_instructions,
                 ..Default::default()
             },
         };
@@ -223,6 +225,7 @@ pub(crate) fn build_thread_request(
             model_provider: None,
             cwd,
             approval_policy: request.approval_policy,
+            base_instructions: request.base_instructions,
             experimental_raw_events: false,
             ..Default::default()
         },
@@ -295,6 +298,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 cwd: Some(PathBuf::from("/tmp/project")),
                 approval_policy: Some(AskForApproval::OnRequest),
+                base_instructions: None,
             },
         );
 
@@ -305,6 +309,48 @@ mod tests {
                 assert_eq!(params.model, Some("gpt-5".to_string()));
                 assert_eq!(params.cwd, Some("/tmp/project".to_string()));
                 assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
+            }
+            other => panic!("expected ThreadResume request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_thread_request_sets_base_instructions_for_thread_start() {
+        let request = build_thread_request(
+            RequestId::String("thread-start".to_string()),
+            ThreadSessionRequest {
+                thread_id: None,
+                model: None,
+                cwd: None,
+                approval_policy: None,
+                base_instructions: Some("system prompt".to_string()),
+            },
+        );
+
+        match request {
+            ClientRequest::ThreadStart { params, .. } => {
+                assert_eq!(params.base_instructions, Some("system prompt".to_string()));
+            }
+            other => panic!("expected ThreadStart request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_thread_request_sets_base_instructions_for_thread_resume() {
+        let request = build_thread_request(
+            RequestId::String("thread-resume".to_string()),
+            ThreadSessionRequest {
+                thread_id: Some("thread-123".to_string()),
+                model: None,
+                cwd: None,
+                approval_policy: None,
+                base_instructions: Some("system prompt".to_string()),
+            },
+        );
+
+        match request {
+            ClientRequest::ThreadResume { params, .. } => {
+                assert_eq!(params.base_instructions, Some("system prompt".to_string()));
             }
             other => panic!("expected ThreadResume request, got {other:?}"),
         }
