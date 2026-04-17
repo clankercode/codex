@@ -592,10 +592,9 @@ impl StdioAppServerClient {
             .await
             .is_ok()
             && let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
+            && let Ok(command_result) = command_result
         {
-            if let Ok(command_result) = command_result {
-                command_result?;
-            }
+            command_result?;
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {

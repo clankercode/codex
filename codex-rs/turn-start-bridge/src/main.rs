@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use clap::ValueEnum;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::CodexTurnClient;
@@ -26,10 +27,12 @@ use codex_turn_start_bridge_core::BridgeController;
 use codex_turn_start_bridge_core::CompletionSignal;
 use codex_turn_start_bridge_core::ControllerEvent;
 use codex_turn_start_bridge_core::ParsedMessage;
+use codex_turn_start_bridge_core::ParsedXmlInput;
 use codex_turn_start_bridge_core::QuiescencePolicy;
 use codex_turn_start_bridge_core::ReadSignal;
 use codex_turn_start_bridge_core::ReleaseAction;
 use codex_turn_start_bridge_core::ReleaseDecision;
+use codex_turn_start_bridge_core::XmlInputParser;
 use codex_turn_start_bridge_core::parse_prefixed_message;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::io::AsyncReadExt;
@@ -63,8 +66,30 @@ struct Cli {
     #[arg(long)]
     cwd: Option<PathBuf>,
 
+    #[arg(long)]
+    system_prompt: Option<String>,
+
+    #[arg(long, value_enum, default_value_t = StdinFormat::Raw)]
+    stdin_format: StdinFormat,
+
     #[arg(long, default_value_t = 25)]
     chunk_quiescence_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum StdinFormat {
+    #[default]
+    Raw,
+    Xml,
+}
+
+#[derive(Clone, Debug, Default)]
+struct XmlReadPrelude {
+    system_prompt: Option<String>,
+    pending_messages: Vec<ParsedMessage>,
+    stdin_closed: bool,
+    parser: XmlInputParser,
 }
 
 #[ctor::ctor]
@@ -76,6 +101,32 @@ fn pre_main() {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let approval_policy = parse_approval_policy(&cli.approval_policy)?;
+    let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<ParsedMessage>();
+    let (input_error_tx, mut input_error_rx) = mpsc::unbounded_channel::<String>();
+    let mut stdin_closed = false;
+    let mut initial_messages = Vec::new();
+    let xml_system_prompt = match cli.stdin_format {
+        StdinFormat::Raw => None,
+        StdinFormat::Xml => {
+            let mut stdin = tokio::io::stdin();
+            let prelude = read_xml_prelude_from_reader(&mut stdin).await?;
+            stdin_closed = prelude.stdin_closed;
+            initial_messages = prelude.pending_messages;
+            if !stdin_closed {
+                let chunk_tx = chunk_tx.clone();
+                let input_error_tx = input_error_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(err) =
+                        read_xml_chunks_from_reader(stdin, prelude.parser, chunk_tx).await
+                    {
+                        let _ = input_error_tx.send(err.to_string());
+                    }
+                });
+            }
+            prelude.system_prompt
+        }
+    };
+
     let mut client = AppServerClient::Stdio(
         StdioAppServerClient::connect(StdioAppServerConnectArgs {
             codex_bin: cli.codex_bin.clone(),
@@ -91,6 +142,8 @@ async fn main() -> Result<()> {
     );
 
     let turn_client = CodexTurnClient::new(client.request_handle());
+    let thread_request = thread_session_request_from_cli(&cli, approval_policy, xml_system_prompt)
+        .context("build thread session request")?;
     let thread_start = turn_client
         .start_or_resume_thread(
             if cli.thread_id.is_some() {
@@ -98,32 +151,40 @@ async fn main() -> Result<()> {
             } else {
                 "thread-start"
             },
-            ThreadSessionRequest {
-                thread_id: cli.thread_id.clone(),
-                model: cli.model.clone(),
-                cwd: cli.cwd.clone(),
-                approval_policy: Some(approval_policy),
-            },
+            thread_request,
         )
         .await
         .context("start or resume thread")?;
     let mut session = thread_start.session;
     let mut controller = BridgeController::new(thread_start.thread.id.clone());
     restore_controller_from_thread(&mut controller, &thread_start.thread);
-    let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<ParsedMessage>();
-    let mut stdin_closed = false;
 
-    let chunk_policy = QuiescencePolicy {
-        chunk_quiescence_ms: cli.chunk_quiescence_ms,
-    };
-    tokio::spawn(async move {
-        let _ = read_stdin_chunks(chunk_policy, chunk_tx).await;
-    });
+    if matches!(cli.stdin_format, StdinFormat::Raw) {
+        let chunk_policy = QuiescencePolicy {
+            chunk_quiescence_ms: cli.chunk_quiescence_ms,
+        };
+        let chunk_tx = chunk_tx.clone();
+        let input_error_tx = input_error_tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = read_stdin_chunks(chunk_policy, chunk_tx).await {
+                let _ = input_error_tx.send(err.to_string());
+            }
+        });
+    }
+    drop(chunk_tx);
+    drop(input_error_tx);
 
     let mut next_request_id: i64 = 1;
     let mut pending_start_request_id: Option<String> = None;
     let mut pending_request: Option<oneshot::Receiver<PendingRequestOutcome>> = None;
     let mut pending_decisions = VecDeque::new();
+    for message in initial_messages {
+        if let Some(decision) =
+            controller.on_event(ControllerEvent::MessageReceived(parsed_to_queued(message)))
+        {
+            pending_decisions.push_back(decision);
+        }
+    }
 
     loop {
         while pending_request.is_none() {
@@ -164,6 +225,12 @@ async fn main() -> Result<()> {
                 if let Some(error) = controller.take_validation_error() {
                     anyhow::bail!(error);
                 }
+            }
+            maybe_error = input_error_rx.recv() => {
+                let Some(error) = maybe_error else {
+                    continue;
+                };
+                anyhow::bail!(error);
             }
             maybe_event = client.next_event() => {
                 let Some(event) = maybe_event else {
@@ -217,6 +284,28 @@ fn parsed_to_queued(message: ParsedMessage) -> codex_turn_start_bridge_core::Que
         queue_mode: message.queue_mode,
         text: message.text,
     }
+}
+
+fn thread_session_request_from_cli(
+    cli: &Cli,
+    approval_policy: AskForApproval,
+    xml_system_prompt: Option<String>,
+) -> Result<ThreadSessionRequest> {
+    let base_instructions = match (cli.system_prompt.clone(), xml_system_prompt) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("system prompt provided by both --system-prompt and XML stdin");
+        }
+        (Some(prompt), None) | (None, Some(prompt)) => Some(prompt),
+        (None, None) => None,
+    };
+
+    Ok(ThreadSessionRequest {
+        thread_id: cli.thread_id.clone(),
+        model: cli.model.clone(),
+        cwd: cli.cwd.clone(),
+        approval_policy: Some(approval_policy),
+        base_instructions,
+    })
 }
 
 fn restore_controller_from_thread(
@@ -506,6 +595,84 @@ where
     Ok(())
 }
 
+async fn read_xml_prelude_from_reader<R>(reader: &mut R) -> Result<XmlReadPrelude>
+where
+    R: AsyncReadExt + Unpin,
+{
+    let mut parser = XmlInputParser::default();
+    let mut buf = [0_u8; 4096];
+    let mut system_prompt = None;
+
+    loop {
+        let bytes_read = reader.read(&mut buf).await.context("read stdin")?;
+        if bytes_read == 0 {
+            parser.finish().context("parse XML stdin")?;
+            return Ok(XmlReadPrelude {
+                system_prompt,
+                pending_messages: Vec::new(),
+                stdin_closed: true,
+                parser,
+            });
+        }
+
+        let input = std::str::from_utf8(&buf[..bytes_read]).context("read XML stdin as UTF-8")?;
+        let items = parser.push(input).context("parse XML stdin")?;
+        let mut pending_messages = Vec::new();
+        for item in items {
+            match item {
+                ParsedXmlInput::SystemPrompt(prompt) => {
+                    if system_prompt.replace(prompt).is_some() {
+                        anyhow::bail!("system_prompt specified more than once");
+                    }
+                }
+                ParsedXmlInput::Message(message) => pending_messages.push(message),
+            }
+        }
+
+        if !pending_messages.is_empty() {
+            return Ok(XmlReadPrelude {
+                system_prompt,
+                pending_messages,
+                stdin_closed: false,
+                parser,
+            });
+        }
+    }
+}
+
+async fn read_xml_chunks_from_reader<R>(
+    mut reader: R,
+    mut parser: XmlInputParser,
+    chunk_tx: mpsc::UnboundedSender<ParsedMessage>,
+) -> Result<()>
+where
+    R: AsyncReadExt + Unpin,
+{
+    let mut buf = [0_u8; 4096];
+
+    loop {
+        let bytes_read = reader.read(&mut buf).await.context("read stdin")?;
+        if bytes_read == 0 {
+            parser.finish().context("parse XML stdin")?;
+            break;
+        }
+
+        let input = std::str::from_utf8(&buf[..bytes_read]).context("read XML stdin as UTF-8")?;
+        for item in parser.push(input).context("parse XML stdin")? {
+            match item {
+                ParsedXmlInput::SystemPrompt(_) => {
+                    anyhow::bail!("system_prompt must appear before the first message");
+                }
+                ParsedXmlInput::Message(message) => {
+                    let _ = chunk_tx.send(message);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_approval_policy(value: &str) -> Result<AskForApproval> {
     match value {
         "untrusted" | "unless-trusted" | "unlessTrusted" => Ok(AskForApproval::UnlessTrusted),
@@ -541,8 +708,7 @@ fn unsupported_server_request_error(request: &ServerRequest) -> JSONRPCErrorErro
     JSONRPCErrorError {
         code: -32601,
         message: format!(
-            "turn-start bridge does not support interactive server request `{}`",
-            method
+            "turn-start bridge does not support interactive server request `{method}`"
         ),
         data: None,
     }
@@ -569,15 +735,20 @@ fn server_request_method_name(request: &ServerRequest) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::Cli;
     use super::CodexTurnSession;
     use super::QuiescencePolicy;
+    use super::StdinFormat;
     use super::on_notification;
     use super::read_chunks_from_reader;
+    use super::read_xml_prelude_from_reader;
     use super::server_request_method_name;
     use super::should_exit_bridge;
     use super::should_retry_steer_next_turn;
+    use super::thread_session_request_from_cli;
     use super::unsupported_server_request_error;
     use super::unsupported_server_request_failure;
+    use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -602,6 +773,84 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn thread_session_request_includes_system_prompt_override() {
+        let cli = Cli {
+            config_overrides: Default::default(),
+            codex_bin: "codex".into(),
+            thread_id: None,
+            approval_policy: "on-request".to_string(),
+            model: None,
+            cwd: None,
+            system_prompt: Some("stay terse".to_string()),
+            stdin_format: StdinFormat::Raw,
+            chunk_quiescence_ms: 25,
+        };
+
+        let request = thread_session_request_from_cli(&cli, AskForApproval::OnRequest, None)
+            .expect("request should be valid");
+
+        assert_eq!(request.base_instructions, Some("stay terse".to_string()));
+    }
+
+    #[tokio::test]
+    async fn xml_prelude_reads_startup_system_prompt_and_first_messages() {
+        let reader = tokio::io::BufReader::new(
+            b"<system_prompt>be terse</system_prompt>\
+              <message type=\"user\">first</message>\
+              <message type=\"user\" queue=\"Immediate\">second</message>"
+                .as_slice(),
+        );
+        let mut reader = reader;
+
+        let prelude = read_xml_prelude_from_reader(&mut reader)
+            .await
+            .expect("prelude should parse");
+
+        assert_eq!(prelude.system_prompt, Some("be terse".to_string()));
+        assert_eq!(
+            prelude.pending_messages,
+            vec![
+                codex_turn_start_bridge_core::ParsedMessage {
+                    queue_mode: QueueMode::Default,
+                    text: "first".to_string(),
+                },
+                codex_turn_start_bridge_core::ParsedMessage {
+                    queue_mode: QueueMode::Immediate,
+                    text: "second".to_string(),
+                },
+            ]
+        );
+        assert_eq!(prelude.stdin_closed, false);
+    }
+
+    #[test]
+    fn cli_system_prompt_conflicts_with_xml_system_prompt() {
+        let cli = Cli {
+            config_overrides: Default::default(),
+            codex_bin: "codex".into(),
+            thread_id: None,
+            approval_policy: "on-request".to_string(),
+            model: None,
+            cwd: None,
+            system_prompt: Some("from cli".to_string()),
+            stdin_format: StdinFormat::Xml,
+            chunk_quiescence_ms: 25,
+        };
+
+        let err = thread_session_request_from_cli(
+            &cli,
+            AskForApproval::OnRequest,
+            Some("from xml".to_string()),
+        )
+        .expect_err("duplicate system prompt should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "system prompt provided by both --system-prompt and XML stdin"
+        );
+    }
 
     fn active_thread_fixture() -> Thread {
         Thread {

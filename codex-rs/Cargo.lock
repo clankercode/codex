@@ -3057,6 +3057,8 @@ name = "codex-turn-start-bridge-core"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
+ "quick-xml",
+ "serde",
 ]
 
 [[package]]
