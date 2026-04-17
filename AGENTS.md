@@ -1,3 +1,10 @@
+# Preliminary note: x-thin fork of codex.
+
+The x-thin fork of codex is a fork to add features to better support a new agent (meta)
+harness. This is geared around greater control of context, tooling, etc. The default
+branch for the fork is x-thin. Ideally the changes made by the fork are made so that
+pulling in changes from upstream do not cause git conflicts. 
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:
