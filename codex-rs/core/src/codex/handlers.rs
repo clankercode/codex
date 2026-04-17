@@ -164,6 +164,8 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    base_instructions: None,
+                    developer_instructions: None,
                 },
                 None,
             )

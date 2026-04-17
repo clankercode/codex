@@ -84,6 +84,9 @@ struct MultitoolCli {
     pub feature_toggles: FeatureToggles,
 
     #[clap(flatten)]
+    minimal_context: MinimalContextOptions,
+
+    #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
@@ -605,6 +608,16 @@ struct InteractiveRemoteOptions {
     remote_auth_token_env: Option<String>,
 }
 
+#[derive(Debug, Default, Parser, Clone)]
+struct MinimalContextOptions {
+    /// Disable most built-in model-visible context and tool surfaces.
+    ///
+    /// Equivalent to the thin-style bundle of feature and config overrides used
+    /// for text-provider integrations.
+    #[arg(long = "text-provider", alias = "minimal-context", global = true)]
+    text_provider: bool,
+}
+
 impl FeatureToggles {
     fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
@@ -625,6 +638,33 @@ impl FeatureToggles {
         } else {
             anyhow::bail!("Unknown feature flag: {feature}")
         }
+    }
+}
+
+impl MinimalContextOptions {
+    fn to_overrides(&self) -> Vec<String> {
+        if !self.text_provider {
+            return Vec::new();
+        }
+
+        [
+            "features.shell_tool=false",
+            "features.apps=false",
+            "features.plugins=false",
+            "features.tool_search=false",
+            "features.tool_suggest=false",
+            "features.image_generation=false",
+            "features.multi_agent=false",
+            "features.memories=false",
+            "features.skill_mcp_dependency_install=false",
+            "skills.bundled.enabled=false",
+            "project_doc_max_bytes=0",
+            "include_apps_instructions=false",
+            "include_permissions_instructions=false",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
     }
 }
 
@@ -671,6 +711,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        minimal_context,
         remote,
         mut interactive,
         subcommand,
@@ -679,6 +720,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+    root_config_overrides
+        .raw_overrides
+        .extend(minimal_context.to_overrides());
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
 
@@ -1572,6 +1616,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            minimal_context: _,
             remote: _,
         } = cli;
 
@@ -1605,6 +1650,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            minimal_context: _,
             remote: _,
         } = cli;
 
@@ -2278,5 +2324,31 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn text_provider_flag_generates_thin_override_bundle() {
+        let overrides = MinimalContextOptions {
+            text_provider: true,
+        }
+        .to_overrides();
+        assert_eq!(
+            overrides,
+            vec![
+                "features.shell_tool=false".to_string(),
+                "features.apps=false".to_string(),
+                "features.plugins=false".to_string(),
+                "features.tool_search=false".to_string(),
+                "features.tool_suggest=false".to_string(),
+                "features.image_generation=false".to_string(),
+                "features.multi_agent=false".to_string(),
+                "features.memories=false".to_string(),
+                "features.skill_mcp_dependency_install=false".to_string(),
+                "skills.bundled.enabled=false".to_string(),
+                "project_doc_max_bytes=0".to_string(),
+                "include_apps_instructions=false".to_string(),
+                "include_permissions_instructions=false".to_string(),
+            ]
+        );
     }
 }

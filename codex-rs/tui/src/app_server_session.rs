@@ -451,6 +451,8 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    base_instructions: None,
+                    developer_instructions: None,
                 },
             })
             .await

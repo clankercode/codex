@@ -1,5 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
+use crate::codex::SessionSettingsUpdate;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
@@ -122,6 +123,11 @@ impl CodexThread {
         self.codex
             .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
+    }
+
+    /// Update persistent session settings used for subsequent turns.
+    pub async fn update_settings(&self, updates: SessionSettingsUpdate) -> ConstraintResult<()> {
+        self.codex.update_settings(updates).await
     }
 
     /// Use sparingly: this is intended to be removed soon.

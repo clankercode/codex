@@ -4257,6 +4257,12 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Override the base instructions for this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub base_instructions: Option<String>,
+    /// Override the developer instructions for this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
     #[ts(optional = nullable)]
@@ -4345,6 +4351,42 @@ pub struct ThreadInjectItemsParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadInjectItemsResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum InjectedMessageRole {
+    User,
+    Assistant,
+    Developer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InjectedMessage {
+    pub role: InjectedMessageRole,
+    /// Plain-text message content. Use `thread/inject_items` when you need raw
+    /// Responses API item control or non-text content.
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectMessagesParams {
+    pub thread_id: String,
+    /// Typed text messages to append to the thread's model-visible history.
+    ///
+    /// Assistant messages are stored as `output_text`; user and developer
+    /// messages use `input_text`.
+    pub messages: Vec<InjectedMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectMessagesResponse {}
 
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
@@ -8786,6 +8828,8 @@ mod tests {
             service_tier: None,
             effort: None,
             summary: None,
+            base_instructions: None,
+            developer_instructions: None,
             output_schema: None,
             collaboration_mode: None,
             personality: None,

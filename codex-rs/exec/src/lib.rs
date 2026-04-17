@@ -740,6 +740,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         personality: None,
                         output_schema,
                         collaboration_mode: None,
+                        base_instructions: None,
+                        developer_instructions: None,
                     },
                 },
                 "turn/start",
