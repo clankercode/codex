@@ -240,6 +240,10 @@ impl CodexThread {
         self.codex.session.validate_settings(&updates).await
     }
 
+    /// Update persistent session settings used for subsequent turns.
+    pub async fn update_settings(&self, updates: SessionSettingsUpdate) -> ConstraintResult<()> {
+        self.codex.update_settings(updates).await
+    }
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await

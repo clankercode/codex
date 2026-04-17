@@ -164,6 +164,8 @@ use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
+use codex_app_server_protocol::ThreadInjectMessagesParams;
+use codex_app_server_protocol::ThreadInjectMessagesResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -237,6 +239,7 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
+use codex_core::SessionSettingsUpdate;
 use codex_core::StartThreadWithToolsOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -328,6 +331,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
@@ -1089,6 +1093,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadInjectItems { request_id, params } => {
                 self.thread_inject_items(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadInjectMessages { request_id, params } => {
+                self.thread_inject_messages(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
@@ -7111,10 +7119,31 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let TurnStartParams {
+            thread_id: _,
+            input,
+            responsesapi_client_metadata,
+            environments,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            model,
+            service_tier,
+            effort,
+            summary,
+            personality,
+            base_instructions,
+            developer_instructions,
+            output_schema,
+            collaboration_mode,
+        } = params;
+
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
         };
-        let collaboration_mode = params.collaboration_mode.map(|mode| {
+        let collaboration_mode = collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
         let environments: Option<Vec<TurnEnvironmentSelection>> =
@@ -7138,25 +7167,22 @@ impl CodexMessageProcessor {
         }
 
         // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
+        let mapped_items: Vec<CoreInputItem> =
+            input.into_iter().map(V2UserInput::into_core).collect();
 
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.permission_profile.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
+        let has_any_overrides = cwd.is_some()
+            || approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox_policy.is_some()
+            || permission_profile.is_some()
+            || model.is_some()
+            || service_tier.is_some()
+            || effort.is_some()
+            || summary.is_some()
             || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || personality.is_some();
 
-        if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
+        if sandbox_policy.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
                 request_id,
                 "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
@@ -7165,18 +7191,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let cwd = params.cwd;
-        let approval_policy = params.approval_policy.map(AskForApproval::to_core);
-        let approvals_reviewer = params
-            .approvals_reviewer
-            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let permission_profile = params.permission_profile.map(Into::into);
-        let model = params.model;
-        let effort = params.effort.map(Some);
-        let summary = params.summary;
-        let service_tier = params.service_tier;
-        let personality = params.personality;
+        let approval_policy = approval_policy.map(AskForApproval::to_core);
+        let approvals_reviewer =
+            approvals_reviewer.map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = sandbox_policy.map(|p| p.to_core());
+        let permission_profile = permission_profile.map(Into::into);
+        let effort = effort.map(Some);
 
         // If any overrides are provided, validate them synchronously so the
         // request can fail before accepting user input. The actual update is
@@ -7208,13 +7228,23 @@ impl CodexMessageProcessor {
             }
         }
 
+        if base_instructions.is_some() || developer_instructions.is_some() {
+            let _ = thread
+                .update_settings(SessionSettingsUpdate {
+                    base_instructions,
+                    developer_instructions,
+                    ..Default::default()
+                })
+                .await;
+        }
+
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = if has_any_overrides {
             Op::UserInputWithTurnContext {
                 items: mapped_items,
                 environments,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
+                final_output_json_schema: output_schema,
+                responsesapi_client_metadata,
                 cwd,
                 approval_policy,
                 approvals_reviewer,
@@ -7232,8 +7262,8 @@ impl CodexMessageProcessor {
             Op::UserInput {
                 items: mapped_items,
                 environments,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
+                final_output_json_schema: output_schema,
+                responsesapi_client_metadata,
             }
         };
         let turn_id = self
@@ -7322,6 +7352,67 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to inject response items: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_inject_messages(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadInjectMessagesParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let items = params
+            .messages
+            .into_iter()
+            .map(|message| {
+                let (role, content) = match message.role {
+                    codex_app_server_protocol::InjectedMessageRole::Assistant => (
+                        "assistant".to_string(),
+                        vec![ContentItem::OutputText { text: message.text }],
+                    ),
+                    codex_app_server_protocol::InjectedMessageRole::Developer => (
+                        "developer".to_string(),
+                        vec![ContentItem::InputText { text: message.text }],
+                    ),
+                    codex_app_server_protocol::InjectedMessageRole::User => (
+                        "user".to_string(),
+                        vec![ContentItem::InputText { text: message.text }],
+                    ),
+                };
+
+                ResponseItem::Message {
+                    id: None,
+                    role,
+                    content,
+                    end_turn: None,
+                    phase: None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        match thread.inject_response_items(items).await {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ThreadInjectMessagesResponse {})
+                    .await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to inject typed messages: {err}"),
                 )
                 .await;
             }

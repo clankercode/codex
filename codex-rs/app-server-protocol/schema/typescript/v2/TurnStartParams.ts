@@ -46,6 +46,12 @@ summary?: ReasoningSummary | null, /**
  * Override the personality for this turn and subsequent turns.
  */
 personality?: Personality | null, /**
+ * Override the base instructions for this turn and subsequent turns.
+ */
+baseInstructions?: string | null, /**
+ * Override the developer instructions for this turn and subsequent turns.
+ */
+developerInstructions?: string | null, /**
  * Optional JSON Schema used to constrain the final assistant message for
  * this turn.
  */

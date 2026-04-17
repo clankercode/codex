@@ -257,6 +257,8 @@ pub(crate) fn build_turn_start_request(
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            base_instructions: None,
+            developer_instructions: None,
         },
     }
 }

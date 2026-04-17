@@ -14,6 +14,7 @@ mod realtime_context;
 mod realtime_conversation;
 mod realtime_prompt;
 pub(crate) mod session;
+pub use session::SessionSettingsUpdate;
 pub use session::SteerInputError;
 mod codex_thread;
 mod compact_remote;

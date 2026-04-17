@@ -1,9 +1,9 @@
-- [] allow injecting non-user messages (assistant, system, etc)
+- [x] allow injecting non-user messages (assistant, system, etc)
 - [] stdout format and details (for thin)
-- [] support replacing system prompt later
+- [x] support replacing system prompt later
 - [] tool call passthrough/externally registered (external MCP passthrough too?)
 - [] compact statusline for ctx etc
-- [] add easy single CLI flag to disable as much built-in context as possible. see this comment from ~/src/codename-thin implementing a wrapper around codex:
+- [x] add easy single CLI flag to disable as much built-in context as possible. see this comment from ~/src/codename-thin implementing a wrapper around codex:
 
 • [...] but Codex exposes them mostly as -c config overrides rather than dedicated CLI
   flags.
@@ -42,7 +42,7 @@
   see one clean current flag, so Thin now applies the explicit lean set.
 
 
-- [ ] codename-thin coder agent wishlist. 
+- [x] codename-thin coder agent wishlist. 
 
 Please see this response from the coder agent about the wishlist. 
 All paths are relative to ~/src/codename-thin/
@@ -99,3 +99,18 @@ Insert the matrix in this file below.
 
 ** INSERT FEATURE MATRIX HERE **
 
+| Goal / Feature | typed message append API | turn-scoped base instructions | first-class no-tool/no-shell mode | capability introspection JSON | stable error codes | event and usage capture contract | structured usage/quota notifications | lossless raw event replay |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| suitable for a codex fork | yes | yes | yes | yes | yes | yes | yes | yes |
+| reasonable workload (not massive) | yes | yes | yes | yes | yes | no | yes | no |
+| low maintenance / limited code touch | yes | yes | yes | partial | yes | no | yes | no |
+| directly useful to thin right now | yes | yes | yes | yes | yes | partial | yes | partial |
+| builds on existing substrate in this repo | yes | yes | yes | partial | yes | partial | yes | partial |
+| clear downstream API value | yes | yes | yes | yes | yes | yes | yes | yes |
+| current repo already has meaningful substrate | yes | yes | yes | partial | yes | partial | yes | partial |
+| decision | implement now | implement now | implement now | defer | defer new work | defer | defer new work | defer |
+
+Notes:
+- `stable error codes` and `structured usage/quota notifications` already have meaningful support in the fork, so they do not need net-new code in this pass.
+- `capability introspection JSON` looks plausible but still wants a cleaner contract than the current mix of feature/config endpoints.
+- `event and usage capture contract` and `lossless raw event replay` both cross enough boundaries that they miss the "reasonable workload" and "low maintenance" gates for a quick fork pass.

@@ -74,6 +74,22 @@ protocol fields:
 No app-server protocol fields were added. The change uses existing
 `base_instructions` support in `thread/start` and `thread/resume`.
 
+## Additional Relevant Changes
+
+The app-server v2 surface now also exposes a few pieces that matter for x-thin
+integrations:
+
+- `turn/start` accepts `baseInstructions` and `developerInstructions` as
+  persistent session-setting overrides. When provided, later turns on the same
+  thread inherit them, including resumed and forked threads.
+- `thread/inject_messages` appends typed text messages to thread history without
+  constructing raw Responses API items. Supported roles are `user`,
+  `assistant`, and `developer`.
+- `thread/inject_messages` does not accept `system`. System-prompt replacement
+  should continue to use the base-instructions path instead.
+- `codex` CLI now exposes the thin-style minimal-context bundle behind
+  `--text-provider`, with `--minimal-context` retained as an alias.
+
 ## Turn-Start Bridge Core Changes
 
 `codex-turn-start-bridge-core` now exports XML stdin parsing types:

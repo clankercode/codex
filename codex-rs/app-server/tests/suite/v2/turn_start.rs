@@ -45,7 +45,11 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -448,6 +452,180 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
             "emptyDeveloperInputTexts": [],
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_persists_instruction_overrides_across_resume_and_fork() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let first_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "First"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let second_body = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Resumed"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let third_body = responses::sse(vec![
+        responses::ev_response_created("resp-3"),
+        responses::ev_assistant_message("msg-3", "Forked"),
+        responses::ev_completed("resp-3"),
+    ]);
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![first_body, second_body, third_body]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let base_instructions = "Use the thin downstream contract.";
+    let developer_instructions = "Keep responses machine-readable.";
+
+    let first_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            base_instructions: Some(base_instructions.to_string()),
+            developer_instructions: Some(developer_instructions.to_string()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_req = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_req)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let resumed_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: resumed_thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "After resume".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resumed_turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let fork_req = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_req)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: forked_thread,
+        ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    let forked_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: forked_thread.id,
+            input: vec![V2UserInput::Text {
+                text: "After fork".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(forked_turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for request in requests {
+        let body = request.body_json();
+        assert_eq!(body["instructions"], json!(base_instructions));
+
+        let developer_texts = body["input"]
+            .as_array()
+            .expect("input array")
+            .iter()
+            .filter(|item| {
+                item.get("role").and_then(serde_json::Value::as_str) == Some("developer")
+            })
+            .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+            .flatten()
+            .filter(|content| {
+                content.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
+            })
+            .filter_map(|content| content.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(
+            developer_texts.contains(&developer_instructions),
+            "expected developer instructions in request: {developer_texts:?}"
+        );
+    }
 
     Ok(())
 }
@@ -1907,6 +2085,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            base_instructions: None,
+            developer_instructions: None,
         })
         .await?;
     timeout(
@@ -1943,6 +2123,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            base_instructions: None,
+            developer_instructions: None,
         })
         .await?;
     timeout(

@@ -360,6 +360,10 @@ client_request_definitions! {
         params: v2::ThreadInjectItemsParams,
         response: v2::ThreadInjectItemsResponse,
     },
+    ThreadInjectMessages => "thread/inject_messages" {
+        params: v2::ThreadInjectMessagesParams,
+        response: v2::ThreadInjectMessagesResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

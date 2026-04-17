@@ -5680,6 +5680,47 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 }
 
 #[tokio::test]
+async fn session_update_settings_persists_base_instructions_override_to_rollout() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_rollout_recorder(&session).await;
+    let base_instructions = "Persisted turn/start override.".to_string();
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            base_instructions: Some(base_instructions.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("base instructions update should succeed");
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+
+    let history = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history");
+    assert_eq!(
+        history.get_base_instructions(),
+        Some(BaseInstructions {
+            text: base_instructions.clone(),
+        })
+    );
+
+    let InitialHistory::Resumed(resumed) = history else {
+        panic!("expected resumed rollout history");
+    };
+    let persisted_session_meta = resumed.history.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        persisted_session_meta.map(|meta_line| meta_line.meta.base_instructions),
+        Some(Some(BaseInstructions {
+            text: base_instructions,
+        }))
+    );
+}
+
+#[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_split_file_system_policy_to_rollout()
  {
     let (mut session, mut turn_context) = make_session_and_context().await;
