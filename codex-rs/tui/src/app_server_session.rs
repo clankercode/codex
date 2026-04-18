@@ -66,6 +66,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUpdateParams;
+use codex_app_server_protocol::ThreadUpdateResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -363,6 +365,7 @@ impl AppServerSession {
     fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
+            AppServerClient::Stdio(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
         }
     }
@@ -419,6 +422,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         items: Vec<codex_protocol::user_input::UserInput>,
+        prefixed_messages: Option<Vec<codex_app_server_protocol::InjectedMessage>>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
@@ -438,6 +442,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    prefixed_messages,
                     responsesapi_client_metadata: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
@@ -450,6 +455,8 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    base_instructions: None,
+                    developer_instructions: None,
                 },
             })
             .await
@@ -478,6 +485,49 @@ impl AppServerSession {
 
     pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
         self.turn_interrupt(thread_id, String::new()).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn thread_update(
+        &mut self,
+        thread_id: ThreadId,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+        sandbox_policy: Option<SandboxPolicy>,
+        windows_sandbox_level: Option<codex_protocol::config_types::WindowsSandboxLevel>,
+        model: Option<String>,
+        effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
+        summary: Option<codex_protocol::config_types::ReasoningSummary>,
+        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+        collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
+        personality: Option<codex_protocol::config_types::Personality>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadUpdateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUpdate {
+                request_id,
+                params: ThreadUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    cwd,
+                    approval_policy: approval_policy.map(Into::into),
+                    approvals_reviewer: approvals_reviewer.map(Into::into),
+                    sandbox_policy: sandbox_policy.map(Into::into),
+                    windows_sandbox_level,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode,
+                    personality,
+                    base_instructions: None,
+                    developer_instructions: None,
+                },
+            })
+            .await
+            .wrap_err("thread/update failed in TUI")?;
+        Ok(())
     }
 
     pub(crate) async fn turn_steer(
@@ -1201,6 +1251,7 @@ fn app_server_credits_snapshot_to_core(
 mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
+    use crate::version::CODEX_CLI_VERSION;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
@@ -1333,7 +1384,7 @@ mod tests {
                 status: ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
-                cli_version: "0.0.0".to_string(),
+                cli_version: CODEX_CLI_VERSION.to_string(),
                 source: codex_protocol::protocol::SessionSource::Cli.into(),
                 agent_nickname: None,
                 agent_role: None,

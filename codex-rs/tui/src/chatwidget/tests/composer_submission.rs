@@ -801,6 +801,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
         agent_turn_running: true,
+        idle_timing_state: IdleTimingState::default(),
     }));
 
     assert!(chat.agent_turn_running);
@@ -812,6 +813,133 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.agent_turn_running);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn direct_submission_includes_idle_timing_prefix_when_enabled() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.idle_timing_state_mut().restore_completed_turn(
+        "gpt-5.4",
+        chrono::Local::now() - chrono::Duration::seconds(15),
+        Some(std::time::Duration::from_secs(4)),
+    );
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let first_op = loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::OverrideTurnContext { .. }) => break op,
+            Ok(_) => continue,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                panic!("expected Op::OverrideTurnContext but queue was empty")
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                panic!("expected Op::OverrideTurnContext but channel closed")
+            }
+        }
+    };
+    match first_op {
+        Op::OverrideTurnContext {
+            effort,
+            model,
+            cwd,
+            sandbox_policy,
+            ..
+        } => {
+            assert_eq!(model.as_deref(), Some("gpt-5.4"));
+            assert_eq!(effort, Some(chat.current_reasoning_effort()));
+            assert_eq!(cwd.as_deref(), Some(chat.config.cwd.as_path()));
+            assert_eq!(
+                sandbox_policy,
+                Some(chat.config.permissions.sandbox_policy.get().clone())
+            );
+        }
+        other => panic!("expected Op::OverrideTurnContext, got {other:?}"),
+    }
+
+    let second_op = loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserInputWithPrefixedItems { .. }) => break op,
+            Ok(_) => continue,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                panic!("expected Op::UserInputWithPrefixedItems but queue was empty")
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                panic!("expected Op::UserInputWithPrefixedItems but channel closed")
+            }
+        }
+    };
+    match second_op {
+        Op::UserInputWithPrefixedItems {
+            prefixed_items,
+            items,
+            ..
+        } => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(prefixed_items.len(), 1);
+            let codex_protocol::models::ResponseItem::Message { role, content, .. } =
+                &prefixed_items[0]
+            else {
+                panic!("expected developer prefixed message");
+            };
+            assert_eq!(role, "developer");
+            assert_eq!(content.len(), 1);
+            let codex_protocol::models::ContentItem::InputText { text } = &content[0] else {
+                panic!("expected input text content");
+            };
+            assert!(text.starts_with("[timing]\n"));
+            assert!(text.contains("idle_for="));
+            assert!(text.contains("last_turn="));
+        }
+        other => panic!("expected Op::UserInputWithPrefixedItems, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn direct_submission_skips_idle_timing_prefix_while_turn_running() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.agent_turn_running = true;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.idle_timing_state_mut().restore_completed_turn(
+        "gpt-5.4",
+        chrono::Local::now() - chrono::Duration::seconds(15),
+        Some(std::time::Duration::from_secs(4)),
+    );
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let submit_op = loop {
+        match op_rx.try_recv() {
+            Ok(Op::OverrideTurnContext { .. }) => {
+                panic!("did not expect idle timing override while a turn is already running")
+            }
+            Ok(Op::UserInputWithPrefixedItems { .. }) => {
+                panic!("did not expect prefixed idle timing input while steering an active turn")
+            }
+            Ok(op @ Op::UserTurn { .. }) => break op,
+            Ok(_) => continue,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                panic!("expected Op::UserTurn but queue was empty")
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                panic!("expected Op::UserTurn but channel closed")
+            }
+        }
+    };
+
+    match submit_op {
+        Op::UserTurn { effort, model, .. } => {
+            assert_eq!(model, "gpt-5.4");
+            assert_eq!(effort, chat.current_reasoning_effort());
+        }
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]

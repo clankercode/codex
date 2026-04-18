@@ -415,6 +415,23 @@ pub enum Op {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
+    /// Similar to [`Op::UserInput`], but prefixes the turn with additional
+    /// already-typed model-visible history items when the input starts a fresh
+    /// turn instead of steering an active one.
+    UserInputWithPrefixedItems {
+        /// Model-visible history items to append immediately before the user
+        /// message when this starts a fresh turn.
+        prefixed_items: Vec<ResponseItem>,
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
+    },
+
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_thread::CodexThread`].
     UserTurn {
@@ -765,6 +782,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithPrefixedItems { .. } => "user_input_with_prefixed_items",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
@@ -2552,17 +2570,36 @@ impl InitialHistory {
     }
 
     pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
-        // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
+                resumed.history.iter().rev().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
                     _ => None,
                 })
             }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+            InitialHistory::Forked(items) => items.iter().rev().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn get_latest_developer_instructions(&self) -> Option<String> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().rev().find_map(|item| match item {
+                    RolloutItem::TurnContext(turn_context) => {
+                        turn_context.developer_instructions.clone()
+                    }
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().rev().find_map(|item| match item {
+                RolloutItem::TurnContext(turn_context) => {
+                    turn_context.developer_instructions.clone()
+                }
                 _ => None,
             }),
         }
@@ -3895,6 +3932,93 @@ mod tests {
             .get_writable_roots_with_cwd(cwd)
             .iter()
             .any(|root| root.is_path_writable(path))
+    }
+
+    #[test]
+    fn initial_history_prefers_latest_persisted_instruction_overrides() {
+        let earlier_session_meta = SessionMetaLine {
+            meta: SessionMeta {
+                base_instructions: Some(BaseInstructions {
+                    text: "base instructions v1".to_string(),
+                }),
+                ..Default::default()
+            },
+            git: None,
+        };
+        let latest_session_meta = SessionMetaLine {
+            meta: SessionMeta {
+                base_instructions: Some(BaseInstructions {
+                    text: "base instructions v2".to_string(),
+                }),
+                ..Default::default()
+            },
+            git: None,
+        };
+        let earlier_turn_context = TurnContextItem {
+            turn_id: Some("turn-1".to_string()),
+            trace_id: Some("trace-1".to_string()),
+            cwd: test_path_buf("/tmp/project"),
+            current_date: Some("2026-04-18".to_string()),
+            timezone: Some("Australia/Sydney".to_string()),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: Some("developer instructions v1".to_string()),
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+        let latest_turn_context = TurnContextItem {
+            turn_id: Some("turn-2".to_string()),
+            trace_id: Some("trace-2".to_string()),
+            developer_instructions: Some("developer instructions v2".to_string()),
+            ..earlier_turn_context.clone()
+        };
+
+        let resumed = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: vec![
+                RolloutItem::SessionMeta(earlier_session_meta.clone()),
+                RolloutItem::TurnContext(earlier_turn_context.clone()),
+                RolloutItem::SessionMeta(latest_session_meta.clone()),
+                RolloutItem::TurnContext(latest_turn_context.clone()),
+            ],
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        });
+        assert_eq!(
+            resumed.get_base_instructions(),
+            Some(BaseInstructions {
+                text: "base instructions v2".to_string(),
+            })
+        );
+        assert_eq!(
+            resumed.get_latest_developer_instructions(),
+            Some("developer instructions v2".to_string())
+        );
+
+        let forked = InitialHistory::Forked(vec![
+            RolloutItem::SessionMeta(earlier_session_meta),
+            RolloutItem::TurnContext(earlier_turn_context),
+            RolloutItem::SessionMeta(latest_session_meta),
+            RolloutItem::TurnContext(latest_turn_context),
+        ]);
+        assert_eq!(
+            forked.get_base_instructions(),
+            Some(BaseInstructions {
+                text: "base instructions v2".to_string(),
+            })
+        );
+        assert_eq!(
+            forked.get_latest_developer_instructions(),
+            Some("developer instructions v2".to_string())
+        );
     }
 
     #[test]

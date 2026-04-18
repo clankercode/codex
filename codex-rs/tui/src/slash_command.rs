@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Effort,
     Fast,
     Approvals,
     Permissions,
@@ -30,6 +31,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    IdleTime,
     Plan,
     Collab,
     Agent,
@@ -75,6 +77,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::IdleTime => "toggle hidden idle timing context for new turns",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -96,6 +99,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Effort => "set live reasoning effort for the current session",
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
@@ -133,7 +137,9 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
+                | SlashCommand::Effort
                 | SlashCommand::Fast
+                | SlashCommand::IdleTime
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
         )
@@ -177,7 +183,9 @@ impl SlashCommand {
             | SlashCommand::Plugins
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
+            | SlashCommand::Exit
+            | SlashCommand::IdleTime => true,
+            SlashCommand::Effort => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

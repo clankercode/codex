@@ -1,0 +1,6 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "turn-start-bridge-core",
+    crate_name = "codex_turn_start_bridge_core",
+)

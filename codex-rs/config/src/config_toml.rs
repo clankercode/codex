@@ -144,6 +144,9 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
+    /// Model used for manual `/compact` turns when different from the session model.
+    pub compact_model: Option<String>,
+
     /// Optional commit attribution text for commit message co-author trailers.
     ///
     /// Set to an empty string to disable automatic commit attribution.

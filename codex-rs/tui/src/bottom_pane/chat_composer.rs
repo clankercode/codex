@@ -164,6 +164,7 @@ use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
+use super::footer::join_footer_segments;
 use super::footer::max_left_width_for_right;
 use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
@@ -361,6 +362,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
+    status_line_right_value: Option<Line<'static>>,
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
@@ -499,6 +501,7 @@ impl ChatComposer {
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
             ),
             status_line_value: None,
+            status_line_right_value: None,
             status_line_enabled: false,
             active_agent_label: None,
             history_search: None,
@@ -1130,12 +1133,24 @@ impl ChatComposer {
 
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.status_line_value.as_ref().map(|line| {
+        let left = self.status_line_value.as_ref().map(|line| {
             line.spans
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
-        })
+        });
+        let right = self.status_line_right_value.as_ref().map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        });
+        match (left, right) {
+            (Some(left), Some(right)) => Some(format!("{left} · {right}")),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }
     }
 
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {
@@ -2970,6 +2985,7 @@ impl ChatComposer {
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
+            status_line_right_value: self.status_line_right_value.clone(),
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
         }
@@ -3494,6 +3510,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.status_line_right_value == status_line {
+            return false;
+        }
+        self.status_line_right_value = status_line;
+        true
+    }
+
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
         if self.status_line_enabled == enabled {
             return false;
@@ -3733,11 +3757,19 @@ impl ChatComposer {
                         )
                     };
                     let right_line = if status_line_active {
-                        let full =
+                        let full_mode =
                             mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                        let compact = mode_indicator_line(
+                        let compact_mode = mode_indicator_line(
                             self.collaboration_mode_indicator,
                             /*show_cycle_hint*/ false,
+                        );
+                        let full = join_footer_segments(
+                            full_mode,
+                            footer_props.status_line_right_value.clone().map(Line::dim),
+                        );
+                        let compact = join_footer_segments(
+                            compact_mode,
+                            footer_props.status_line_right_value.clone().map(Line::dim),
                         );
                         let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                         if can_show_left_with_context(hint_rect, left_width, full_width) {

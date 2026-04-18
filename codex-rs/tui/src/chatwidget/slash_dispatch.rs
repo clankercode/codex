@@ -110,6 +110,10 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::IdleTime => {
+                let enabled = !self.idle_timing_state.injection_enabled();
+                self.set_idle_timing_injection_enabled(enabled);
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -120,6 +124,18 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Effort => {
+                let status = match self.current_reasoning_effort() {
+                    Some(ReasoningEffortConfig::None) => "off",
+                    Some(ReasoningEffortConfig::Low) => "low",
+                    Some(ReasoningEffortConfig::Medium) => "medium",
+                    Some(ReasoningEffortConfig::High) => "high",
+                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                    Some(ReasoningEffortConfig::Minimal) => "minimal",
+                    None => "default",
+                };
+                self.add_info_message(format!("Reasoning effort is {status}."), /*hint*/ None);
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -394,6 +410,48 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Effort => {
+                let selected_effort = match trimmed.to_ascii_lowercase().as_str() {
+                    "" | "status" => {
+                        self.dispatch_command(cmd);
+                        return;
+                    }
+                    "off" => Some(ReasoningEffortConfig::None),
+                    "low" => Some(ReasoningEffortConfig::Low),
+                    "medium" => Some(ReasoningEffortConfig::Medium),
+                    "high" => Some(ReasoningEffortConfig::High),
+                    "xhigh" => Some(ReasoningEffortConfig::XHigh),
+                    _ => {
+                        self.add_error_message(
+                            "Usage: /effort [off|low|medium|high|xhigh|status]".to_string(),
+                        );
+                        return;
+                    }
+                };
+                if self.active_mode_kind() == ModeKind::Plan {
+                    self.set_plan_mode_reasoning_effort(selected_effort);
+                } else {
+                    self.set_reasoning_effort(selected_effort);
+                }
+                self.app_event_tx
+                    .send(AppEvent::UpdateReasoningEffort(selected_effort));
+                self.app_event_tx.send(AppEvent::CodexOp(
+                    AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*sandbox_policy*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        Some(selected_effort),
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    )
+                    .into_core(),
+                ));
+            }
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
                     self.dispatch_command(cmd);
@@ -427,6 +485,30 @@ impl ChatWidget {
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                    }
+                }
+            }
+            SlashCommand::IdleTime => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => self.set_idle_timing_injection_enabled(/*enabled*/ true),
+                    "off" => self.set_idle_timing_injection_enabled(/*enabled*/ false),
+                    "status" => {
+                        let status = if self.idle_timing_state.injection_enabled() {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(
+                            format!("Idle timing injection is {status}."),
+                            /*hint*/ None,
+                        );
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /idle-time [on|off|status]".to_string());
                     }
                 }
             }

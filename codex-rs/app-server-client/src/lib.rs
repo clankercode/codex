@@ -1,21 +1,27 @@
-//! Shared in-process app-server client facade for CLI surfaces.
+//! Shared app-server client facade for Codex surfaces.
 //!
-//! This crate wraps [`codex_app_server::in_process`] behind a single async API
-//! used by surfaces like TUI and exec. It centralizes:
+//! This crate exposes a single async request/event model across three transport
+//! modes:
 //!
-//! - Runtime startup and initialize-capabilities handshake.
-//! - Typed caller-provided startup identity (`SessionSource` + client name).
-//! - Typed and raw request/notification dispatch.
-//! - Server request resolution and rejection.
-//! - Event consumption with backpressure signaling ([`InProcessServerEvent::Lagged`]).
-//! - Bounded graceful shutdown with abort fallback.
+//! - in-process runtime embedding
+//! - remote websocket transport
+//! - spawned `codex app-server` over stdio
 //!
-//! The facade interposes a worker task between the caller and the underlying
-//! [`InProcessClientHandle`](codex_app_server::in_process::InProcessClientHandle),
-//! bridging async `mpsc` channels on both sides. Queues are bounded so overload
-//! surfaces as channel-full errors rather than unbounded memory growth.
+//! Across those transports it centralizes:
+//!
+//! - initialize/initialized handshake
+//! - typed and raw request/notification dispatch
+//! - server request resolution and rejection
+//! - event consumption with backpressure signaling
+//! - bounded graceful shutdown with abort fallback
+//!
+//! Callers such as TUI and exec can depend on the shared [`AppServerClient`]
+//! facade and transport-specific connect/start entrypoints without duplicating
+//! protocol plumbing.
 
 mod remote;
+mod stdio;
+mod turn_client;
 
 use std::error::Error;
 use std::fmt;
@@ -57,6 +63,14 @@ use tracing::warn;
 
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
+pub use crate::stdio::StdioAppServerClient;
+pub use crate::stdio::StdioAppServerConnectArgs;
+pub use crate::turn_client::CodexTurnClient;
+pub use crate::turn_client::CodexTurnSession;
+pub use crate::turn_client::ThreadSessionRequest;
+pub use crate::turn_client::ThreadSessionStart;
+pub use crate::turn_client::TurnClientError;
+pub use crate::turn_client::TurnRequest;
 
 /// Transitional access to core-only embedded app-server types.
 ///
@@ -472,11 +486,13 @@ pub struct InProcessAppServerRequestHandle {
 pub enum AppServerRequestHandle {
     InProcess(InProcessAppServerRequestHandle),
     Remote(crate::remote::RemoteAppServerRequestHandle),
+    Stdio(crate::stdio::StdioAppServerRequestHandle),
 }
 
 pub enum AppServerClient {
     InProcess(InProcessAppServerClient),
     Remote(RemoteAppServerClient),
+    Stdio(StdioAppServerClient),
 }
 
 impl InProcessAppServerClient {
@@ -841,6 +857,7 @@ impl AppServerRequestHandle {
         match self {
             Self::InProcess(handle) => handle.request(request).await,
             Self::Remote(handle) => handle.request(request).await,
+            Self::Stdio(handle) => handle.request(request).await,
         }
     }
 
@@ -851,6 +868,7 @@ impl AppServerRequestHandle {
         match self {
             Self::InProcess(handle) => handle.request_typed(request).await,
             Self::Remote(handle) => handle.request_typed(request).await,
+            Self::Stdio(handle) => handle.request_typed(request).await,
         }
     }
 }
@@ -860,6 +878,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.request(request).await,
             Self::Remote(client) => client.request(request).await,
+            Self::Stdio(client) => client.request(request).await,
         }
     }
 
@@ -870,6 +889,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.request_typed(request).await,
             Self::Remote(client) => client.request_typed(request).await,
+            Self::Stdio(client) => client.request_typed(request).await,
         }
     }
 
@@ -877,6 +897,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.notify(notification).await,
             Self::Remote(client) => client.notify(notification).await,
+            Self::Stdio(client) => client.notify(notification).await,
         }
     }
 
@@ -888,6 +909,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.resolve_server_request(request_id, result).await,
             Self::Remote(client) => client.resolve_server_request(request_id, result).await,
+            Self::Stdio(client) => client.resolve_server_request(request_id, result).await,
         }
     }
 
@@ -899,6 +921,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.reject_server_request(request_id, error).await,
             Self::Remote(client) => client.reject_server_request(request_id, error).await,
+            Self::Stdio(client) => client.reject_server_request(request_id, error).await,
         }
     }
 
@@ -906,6 +929,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.next_event().await.map(Into::into),
             Self::Remote(client) => client.next_event().await,
+            Self::Stdio(client) => client.next_event().await,
         }
     }
 
@@ -913,6 +937,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.shutdown().await,
             Self::Remote(client) => client.shutdown().await,
+            Self::Stdio(client) => client.shutdown().await,
         }
     }
 
@@ -920,6 +945,7 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => AppServerRequestHandle::InProcess(client.request_handle()),
             Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
+            Self::Stdio(client) => AppServerRequestHandle::Stdio(client.request_handle()),
         }
     }
 }
@@ -957,6 +983,10 @@ mod tests {
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -1172,6 +1202,52 @@ mod tests {
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         }
+    }
+
+    fn test_stdio_connect_args(codex_bin: PathBuf) -> StdioAppServerConnectArgs {
+        StdioAppServerConnectArgs {
+            codex_bin,
+            config_overrides: Vec::new(),
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        }
+    }
+
+    fn write_test_codex_wrapper() -> PathBuf {
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+        let tempdir_path = tempdir.keep();
+        let wrapper_path = tempdir_path.join("codex");
+        let script = r#"#!/usr/bin/env sh
+if [ "$1" != "app-server" ]; then
+  printf 'unexpected subcommand: %s\n' "$1" >&2
+  exit 64
+fi
+read -r initialize_line || exit 1
+initialize_id=$(printf '%s\n' "$initialize_line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$initialize_id" ] || exit 2
+printf '{"id":"%s","result":{"userAgent":"codex-test","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}\n' "$initialize_id"
+read -r initialized_line || exit 3
+printf '%s\n' "$initialized_line" | grep '"method":"initialized"' >/dev/null || exit 4
+read -r request_line || exit 5
+printf '%s\n' "$request_line" | grep '"method":"configRequirements/read"' >/dev/null || exit 6
+request_id=$(printf '%s\n' "$request_line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+[ -n "$request_id" ] || exit 7
+printf '{"id":%s,"result":{"requirements":null}}\n' "$request_id"
+"#;
+        fs::write(&wrapper_path, script).expect("wrapper script should write");
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&wrapper_path)
+                .expect("wrapper metadata should load")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&wrapper_path, permissions)
+                .expect("wrapper permissions should update");
+        }
+        wrapper_path
     }
 
     #[tokio::test]
@@ -1400,6 +1476,24 @@ mod tests {
             .await
             .expect("typed request should succeed");
         assert_eq!(response.account, None);
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn stdio_spawned_codex_handles_typed_request_roundtrip() {
+        let codex_bin = write_test_codex_wrapper();
+        let client = StdioAppServerClient::connect(test_stdio_connect_args(codex_bin))
+            .await
+            .expect("stdio client should connect");
+
+        let _response: ConfigRequirementsReadResponse = client
+            .request_typed(ClientRequest::ConfigRequirementsRead {
+                request_id: RequestId::Integer(1),
+                params: None,
+            })
+            .await
+            .expect("typed request should succeed");
 
         client.shutdown().await.expect("shutdown should complete");
     }

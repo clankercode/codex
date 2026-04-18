@@ -101,6 +101,9 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title (if set by user).
     ThreadTitle,
+
+    /// Time elapsed since the last completed model turn.
+    IdleTime,
 }
 
 impl StatusLineItem {
@@ -136,6 +139,9 @@ impl StatusLineItem {
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
             StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
+            StatusLineItem::IdleTime => {
+                "Idle time since the last completed model turn (omitted until available)"
+            }
         }
     }
 }

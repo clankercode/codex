@@ -251,6 +251,11 @@ client_request_definitions! {
         inspect_params: true,
         response: v2::ThreadForkResponse,
     },
+    ThreadImportTranscript => "thread/import_transcript" {
+        params: v2::ThreadImportTranscriptParams,
+        inspect_params: true,
+        response: v2::ThreadImportTranscriptResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
@@ -279,6 +284,11 @@ client_request_definitions! {
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
+    },
+    ThreadUpdate => "thread/update" {
+        params: v2::ThreadUpdateParams,
+        inspect_params: true,
+        response: v2::ThreadUpdateResponse,
     },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
@@ -331,6 +341,10 @@ client_request_definitions! {
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
         response: v2::ThreadInjectItemsResponse,
+    },
+    ThreadInjectMessages => "thread/inject_messages" {
+        params: v2::ThreadInjectMessagesParams,
+        response: v2::ThreadInjectMessagesResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
