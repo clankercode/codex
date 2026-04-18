@@ -82,6 +82,10 @@ integrations:
 - `turn/start` accepts `baseInstructions` and `developerInstructions` as
   persistent session-setting overrides. When provided, later turns on the same
   thread inherit them, including resumed and forked threads.
+- `turn/start` accepts `prefixedMessages`: typed history messages that are
+  appended to thread history immediately before the turn's user input, but only
+  if the turn starts successfully. Roles follow the same `user`/`assistant`/
+  `developer` rule as `thread/inject_messages` (no `system`).
 - `thread/inject_messages` appends typed text messages to thread history without
   constructing raw Responses API items. Supported roles are `user`,
   `assistant`, and `developer`.
@@ -101,8 +105,73 @@ integrations:
   importing connection’s subscription to the source thread after success so the
   existing idle-unload path can reclaim that old loaded thread if nothing else
   is using it.
+- `thread/update` is a new v2 method that updates session settings on an
+  existing thread without starting a turn. It accepts the same override fields
+  as `turn/start` (cwd, approval policy, approvals reviewer, sandbox policy,
+  Windows sandbox level, model, reasoning effort, reasoning summary, service
+  tier, collaboration mode, personality, base instructions, developer
+  instructions). Omitted fields are left untouched.
 - `codex` CLI now exposes the thin-style minimal-context bundle behind
   `--text-provider`, with `--minimal-context` retained as an alias.
+
+## App-Server Stdio Transport
+
+`codex-app-server-client` now offers a third transport alongside in-process and
+remote websocket:
+
+- `AppServerClient::Stdio` wraps `StdioAppServerClient`, which spawns a local
+  `codex app-server` child process and speaks newline-delimited JSON-RPC over
+  its stdio.
+- `StdioAppServerConnectArgs` captures the spawn command, environment, and
+  startup identity the same way `RemoteAppServerConnectArgs` does for
+  websocket.
+- The facade mirrors the existing API surface: request, `request_typed`,
+  notification, server-request resolve/reject, `next_event`, and graceful
+  `shutdown`. Embedded surfaces that accept in-process also accept stdio where
+  thread parameters are constructed in-process.
+
+The crate also exports a shared `turn_client` module:
+
+- `CodexTurnClient` / `CodexTurnSession` wrap the per-thread turn lifecycle.
+- `ThreadSessionRequest` and `ThreadSessionStart` describe thread acquisition
+  (including the `baseInstructions` field documented above) independent of
+  transport.
+- `TurnRequest` and `TurnClientError` provide typed turn submission and error
+  reporting so callers do not re-build protocol plumbing per surface.
+
+## Compact And Reasoning Overrides
+
+- `config.toml` gains `compact_model`: the model used for manual `/compact`
+  turns when it should differ from the session model. When unset, compaction
+  uses the active model.
+- Manual compaction now builds its prompt from `turn_context.base_instructions()`
+  and calls the model stream with the current runtime reasoning effort, so the
+  persistent overrides introduced in `turn/start` are honored during compaction.
+- Reasoning effort is now a runtime override on the turn context rather than a
+  one-shot argument, so later turns and compactions use the effort selected by
+  the user or by `/effort` until changed.
+
+## TUI Slash Commands And Status Line
+
+- `/effort [off|low|medium|high|xhigh|status]` reports or changes the current
+  reasoning effort. With no argument (or `status`) it prints the current
+  effort. Setting a value updates Plan mode effort when in Plan mode, otherwise
+  the session-level effort, and pushes an `override_turn_context` update with
+  the new effort.
+- `/idletime` toggles a hidden idle-timing context injection for new turns and
+  supports a subcommand form for enable/disable.
+- `codex-rs/tui/src/idle_timing.rs` adds `IdleTimingState` and
+  `PreparedIdleTimingSubmission`. When injection is enabled, the status line
+  shows a compact "idle for X" marker that refreshes once per second and a
+  developer-role note is prepared for the next turn's `prefixedMessages`.
+- `SlashCommand::Effort` and `SlashCommand::IdleTime` are registered in
+  `slash_command.rs` with help text visible in the slash popup.
+
+## Version
+
+- `codex-rs` workspace version is bumped to `0.122.0`. The new
+  `turn-start-bridge` and `turn-start-bridge-core` crates are added to the
+  workspace members list.
 
 ## Turn-Start Bridge Core Changes
 
