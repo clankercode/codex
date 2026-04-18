@@ -27,6 +27,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
@@ -776,6 +777,7 @@ pub struct Config {
     pub instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
+    pub compact_model: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
@@ -2948,6 +2950,69 @@ pub struct ThreadForkResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportTranscriptParams {
+    /// Optional source thread used to inherit defaults such as cwd and stored
+    /// metadata. The imported transcript still creates a fresh thread id.
+    #[ts(optional = nullable)]
+    pub source_thread_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[ts(optional = nullable)]
+    pub sandbox: Option<SandboxMode>,
+    #[ts(optional = nullable)]
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    #[ts(optional = nullable)]
+    pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+    #[serde(default)]
+    pub persist_extended_history: bool,
+    pub messages: Vec<InjectedMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportTranscriptResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<ServiceTier>,
+    pub cwd: AbsolutePathBuf,
+    #[serde(default)]
+    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3042,6 +3107,58 @@ pub struct ThreadUnarchiveParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUpdateParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    #[ts(optional = nullable)]
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable, type = "\"none\" | \"minimal\" | \"low\" | \"medium\" | \"high\" | \"xhigh\" | null")]
+    pub effort: Option<Option<ReasoningEffort>>,
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
+    #[experimental("thread/update.collaborationMode")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+    #[ts(optional = nullable)]
+    pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUpdateResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4218,6 +4335,10 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional typed history messages to append immediately before this turn's
+    /// user input if the turn starts successfully.
+    #[ts(optional = nullable)]
+    pub prefixed_messages: Option<Vec<InjectedMessage>>,
     /// Optional turn-scoped Responses API client metadata.
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
@@ -7599,6 +7720,7 @@ mod tests {
             instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            compact_model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
             model_verbosity: None,
@@ -7632,6 +7754,7 @@ mod tests {
             instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            compact_model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
             model_verbosity: None,
@@ -7687,6 +7810,7 @@ mod tests {
             instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            compact_model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
             model_verbosity: None,
@@ -7736,6 +7860,7 @@ mod tests {
             instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            compact_model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
             model_verbosity: None,
@@ -7843,6 +7968,7 @@ mod tests {
                 params: TurnStartParams {
                     thread_id: "thr_123".to_string(),
                     input: Vec::new(),
+                    prefixed_messages: None,
                     approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: true,
@@ -8819,6 +8945,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            prefixed_messages: None,
             responsesapi_client_metadata: None,
             cwd: None,
             approval_policy: None,

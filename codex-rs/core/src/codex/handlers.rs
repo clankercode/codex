@@ -124,7 +124,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata) = match op {
+    let (prefixed_items, items, updates, responsesapi_client_metadata) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -150,6 +150,7 @@ pub(super) async fn user_input_or_turn_inner(
                 })
             });
             (
+                Vec::new(),
                 items,
                 SessionSettingsUpdate {
                     cwd: Some(cwd),
@@ -175,6 +176,21 @@ pub(super) async fn user_input_or_turn_inner(
             final_output_json_schema,
             responsesapi_client_metadata,
         } => (
+            Vec::new(),
+            items,
+            SessionSettingsUpdate {
+                final_output_json_schema: Some(final_output_json_schema),
+                ..Default::default()
+            },
+            responsesapi_client_metadata,
+        ),
+        Op::UserInputWithPrefixedItems {
+            prefixed_items,
+            items,
+            final_output_json_schema,
+            responsesapi_client_metadata,
+        } => (
+            prefixed_items,
             items,
             SessionSettingsUpdate {
                 final_output_json_schema: Some(final_output_json_schema),
@@ -210,6 +226,10 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
+            if !prefixed_items.is_empty() {
+                sess.record_conversation_items(current_context.as_ref(), &prefixed_items)
+                    .await;
+            }
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let accepted_items = items.clone();
@@ -589,6 +609,14 @@ pub async fn undo(sess: &Arc<Session>, sub_id: String) {
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let turn_context = match turn_context.compact_model.clone() {
+        Some(compact_model) if compact_model != turn_context.model_info.slug => Arc::new(
+            turn_context
+                .with_model(compact_model, &sess.services.models_manager)
+                .await,
+        ),
+        _ => turn_context,
+    };
 
     sess.spawn_task(
         Arc::clone(&turn_context),
@@ -1082,7 +1110,9 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. }
+                | Op::UserInputWithPrefixedItems { .. }
+                | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }

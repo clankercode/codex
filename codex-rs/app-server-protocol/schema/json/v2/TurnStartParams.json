@@ -98,6 +98,30 @@
       ],
       "type": "object"
     },
+    "InjectedMessage": {
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/InjectedMessageRole"
+        },
+        "text": {
+          "description": "Plain-text message content. Use `thread/inject_items` when you need raw Responses API item control or non-text content.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "InjectedMessageRole": {
+      "enum": [
+        "user",
+        "assistant",
+        "developer"
+      ],
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -579,6 +603,16 @@
         }
       ],
       "description": "Override the personality for this turn and subsequent turns."
+    },
+    "prefixedMessages": {
+      "description": "Optional typed history messages to append immediately before this turn's user input if the turn starts successfully.",
+      "items": {
+        "$ref": "#/definitions/InjectedMessage"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "sandboxPolicy": {
       "anyOf": [

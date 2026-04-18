@@ -6,6 +6,7 @@ use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -128,6 +129,10 @@ impl CodexThread {
     /// Update persistent session settings used for subsequent turns.
     pub async fn update_settings(&self, updates: SessionSettingsUpdate) -> ConstraintResult<()> {
         self.codex.update_settings(updates).await
+    }
+
+    pub async fn collaboration_mode(&self) -> CollaborationMode {
+        self.codex.session.collaboration_mode().await
     }
 
     /// Use sparingly: this is intended to be removed soon.

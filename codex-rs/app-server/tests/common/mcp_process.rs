@@ -63,6 +63,7 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadImportTranscriptParams;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectMessagesParams;
 use codex_app_server_protocol::ThreadListParams;
@@ -82,6 +83,7 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUpdateParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -366,6 +368,15 @@ impl McpProcess {
         self.send_request("thread/fork", params).await
     }
 
+    /// Send a `thread/import_transcript` JSON-RPC request.
+    pub async fn send_thread_import_transcript_request(
+        &mut self,
+        params: ThreadImportTranscriptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/import_transcript", params).await
+    }
+
     /// Send a `thread/archive` JSON-RPC request.
     pub async fn send_thread_archive_request(
         &mut self,
@@ -382,6 +393,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/name/set", params).await
+    }
+
+    /// Send a `thread/update` JSON-RPC request.
+    pub async fn send_thread_update_request(
+        &mut self,
+        params: ThreadUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/update", params).await
     }
 
     /// Send a `thread/metadata/update` JSON-RPC request.

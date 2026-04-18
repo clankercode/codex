@@ -7,10 +7,11 @@
   pkg-config,
   lib,
   stdenv,
-  version ? "0.0.0",
+  version ? "0.122.0",
   ...
 }:
 rustPlatform.buildRustPackage (_: {
+  env.CODEX_RELEASE_BUILD = "1";
   env.PKG_CONFIG_PATH = lib.makeSearchPathOutput "dev" "lib/pkgconfig" (
     [ openssl ] ++ lib.optionals stdenv.isLinux [ libcap ]
   );
@@ -22,10 +23,10 @@ rustPlatform.buildRustPackage (_: {
 
   # Patch the workspace Cargo.toml so that cargo embeds the correct version in
   # CARGO_PKG_VERSION (which the binary reads via env!("CARGO_PKG_VERSION")).
-  # On release commits the Cargo.toml already contains the real version and
-  # this sed is a no-op.
+  # On commits where Cargo.toml already matches the requested version this sed
+  # is a no-op.
   postPatch = ''
-    sed -i 's/^version = "0\.0\.0"$/version = "${version}"/' Cargo.toml
+    sed -i '0,/^version = ".*"$/s//version = "${version}"/' Cargo.toml
   '';
   nativeBuildInputs = [
     cmake

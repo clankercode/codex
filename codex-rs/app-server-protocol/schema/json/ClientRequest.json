@@ -2815,6 +2815,128 @@
       ],
       "type": "object"
     },
+    "ThreadImportTranscriptParams": {
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ephemeral": {
+          "type": "boolean"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/definitions/InjectedMessage"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "persistExtendedHistory": {
+          "default": false,
+          "type": "boolean"
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceThreadId": {
+          "description": "Optional source thread used to inherit defaults such as cwd and stored metadata. The imported transcript still creates a fresh thread id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "type": "object"
+    },
     "ThreadInjectItemsParams": {
       "properties": {
         "items": {
@@ -3524,6 +3646,16 @@
           ],
           "description": "Override the personality for this turn and subsequent turns."
         },
+        "prefixedMessages": {
+          "description": "Optional typed history messages to append immediately before this turn's user input if the turn starts successfully.",
+          "items": {
+            "$ref": "#/definitions/InjectedMessage"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "sandboxPolicy": {
           "anyOf": [
             {
@@ -3843,6 +3975,30 @@
         "params"
       ],
       "title": "Thread/forkRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/import_transcript"
+          ],
+          "title": "Thread/importTranscriptRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadImportTranscriptParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/importTranscriptRequest",
       "type": "object"
     },
     {

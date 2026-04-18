@@ -81,7 +81,7 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
 
     assert_eq!(
         chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::ContextWindowSize),
-        Some("950K window".to_string())
+        Some("950K ctx".to_string())
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
 
@@ -874,7 +874,7 @@ async fn status_line_context_used_renders_labeled_percent() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context 0% used".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Ctx 0% used".to_string()));
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "context-used should remain a valid status line item"
@@ -889,10 +889,7 @@ async fn status_line_context_remaining_renders_labeled_percent() {
 
     chat.refresh_status_line();
 
-    assert_eq!(
-        status_line_text(&chat),
-        Some("Context 100% left".to_string())
-    );
+    assert_eq!(status_line_text(&chat), Some("Ctx 100% left".to_string()));
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "context-remaining should remain a valid status line item"
@@ -907,7 +904,7 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context 0% used".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Ctx 0% used".to_string()));
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-usage should remain a valid status line item"
@@ -1006,6 +1003,52 @@ async fn status_line_fast_mode_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_idle_time_blanks_after_model_change() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.tui_status_line = Some(vec!["idle-time".to_string()]);
+    chat.idle_timing_state_mut().begin_turn(Instant::now());
+    chat.idle_timing_state_mut()
+        .complete_turn("gpt-5.4", Local::now());
+
+    chat.refresh_status_line();
+    assert!(
+        status_line_text(&chat)
+            .as_deref()
+            .is_some_and(|value| value.starts_with("Idle ")),
+        "expected idle status line while model matches"
+    );
+
+    chat.set_model("gpt-5.4-mini");
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Idle ---".to_string()));
+}
+
+#[tokio::test]
+async fn default_status_line_items_include_idle_time() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.cwd = test_project_path().abs();
+    chat.idle_timing_state_mut().begin_turn(Instant::now());
+    chat.idle_timing_state_mut()
+        .complete_turn("gpt-5.4", Local::now());
+
+    assert_eq!(
+        chat.configured_status_line_items(),
+        vec![
+            "model-with-reasoning".to_string(),
+            "current-dir".to_string(),
+            "idle-time".to_string(),
+        ]
+    );
+
+    chat.refresh_status_line();
+    let status_line = status_line_text(&chat).expect("default status line");
+    assert!(status_line.starts_with("gpt-5.4"));
+    assert!(status_line.contains(&test_path_display("/tmp/project")));
+    assert!(status_line.contains("Idle "));
+}
+
+#[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
@@ -1026,7 +1069,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.4 xhigh fast · Context 0% used · {test_cwd}"))
+        Some(format!("gpt-5.4 xhigh fast · Ctx 0% used · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -1034,9 +1077,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!(
-            "gpt-5.3-codex xhigh · Context 0% used · {test_cwd}"
-        ))
+        Some(format!("gpt-5.3-codex xhigh · Ctx 0% used · {test_cwd}"))
     );
 }
 

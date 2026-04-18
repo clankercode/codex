@@ -118,7 +118,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
-    let base_instructions = sess.get_base_instructions().await;
+    let base_instructions = turn_context.base_instructions();
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
         turn_context.as_ref(),
@@ -158,13 +158,14 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
+    let reasoning_effort = turn_context.runtime_reasoning_effort().await;
     let mut new_history = sess
         .services
         .model_client
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
-            turn_context.reasoning_effort,
+            reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
         )

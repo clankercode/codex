@@ -55,6 +55,8 @@ use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::idle_timing::IdleTimingState;
+use crate::idle_timing::PreparedIdleTimingSubmission;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
@@ -131,7 +133,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
@@ -383,6 +387,7 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
+use chrono::TimeZone;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
@@ -399,7 +404,7 @@ use unicode_segmentation::UnicodeSegmentation;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] = ["model-with-reasoning", "current-dir", "idle-time"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -977,6 +982,8 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Per-thread idle timing state used for hidden timing injection and idle status rendering.
+    idle_timing_state: IdleTimingState,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -1068,6 +1075,7 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
+    idle_timing_state: IdleTimingState,
     task_running: bool,
     agent_turn_running: bool,
 }
@@ -1831,6 +1839,11 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    /// Sets the right-aligned footer status-line segment.
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        self.bottom_pane.set_status_line_right(status_line);
+    }
+
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
     ///
     /// `ChatWidget` stays a pass-through here so `App` remains the owner of "which thread is the
@@ -1851,6 +1864,47 @@ impl ChatWidget {
     /// placeholders so the line remains compact and stable.
     pub(crate) fn refresh_status_line(&mut self) {
         self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn status_line_needs_live_refresh(&self) -> bool {
+        self.status_line_items_with_invalids()
+            .0
+            .contains(&StatusLineItem::IdleTime)
+            && self.idle_timing_state.needs_status_line_refresh()
+    }
+
+    pub(crate) fn prepare_idle_timing_submission_for_turn_start(
+        &self,
+    ) -> Option<PreparedIdleTimingSubmission> {
+        self.idle_timing_state
+            .prepare_turn_start_submission(Local::now())
+    }
+
+    pub(crate) fn finish_idle_timing_turn_start_submission(
+        &mut self,
+        submission: PreparedIdleTimingSubmission,
+    ) {
+        if let Some(resume_note) = submission.resume_note {
+            self.add_info_message(resume_note, /*hint*/ None);
+        }
+    }
+
+    fn restore_idle_timing_from_completed_turn(
+        &mut self,
+        completed_at_unix_secs: Option<i64>,
+        duration_ms: Option<i64>,
+    ) {
+        let Some(completed_at) = completed_at_unix_secs
+            .and_then(|completed_at| Local.timestamp_opt(completed_at, 0).single())
+        else {
+            return;
+        };
+        let duration = duration_ms
+            .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+            .map(Duration::from_millis);
+        let current_model = self.current_model().to_string();
+        self.idle_timing_state
+            .restore_completed_turn(&current_model, completed_at, duration);
     }
 
     /// Records that status-line setup was canceled.
@@ -1977,6 +2031,7 @@ impl ChatWidget {
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.last_turn_id = None;
+        self.idle_timing_state = IdleTimingState::default();
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
@@ -2321,6 +2376,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.idle_timing_state.begin_turn(Instant::now());
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
@@ -2410,6 +2466,9 @@ impl ChatWidget {
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
+            let current_model = self.current_model().to_string();
+            self.idle_timing_state
+                .complete_turn(&current_model, Local::now());
             self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
@@ -2422,6 +2481,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.refresh_status_line();
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
@@ -3259,6 +3319,7 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            idle_timing_state: self.idle_timing_state.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
         })
@@ -3269,6 +3330,7 @@ impl ChatWidget {
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.idle_timing_state = input_state.idle_timing_state;
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
@@ -4963,6 +5025,7 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            idle_timing_state: IdleTimingState::default(),
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -5569,22 +5632,66 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
-        let op = AppCommand::user_turn(
-            items,
-            self.config.cwd.to_path_buf(),
-            self.config.permissions.approval_policy.value(),
-            self.config.permissions.sandbox_policy.get().clone(),
-            effective_mode.model().to_string(),
-            effective_mode.reasoning_effort(),
-            /*summary*/ None,
-            service_tier,
-            /*final_output_json_schema*/ None,
-            collaboration_mode,
-            personality,
-        );
+        let idle_timing_submission = if matches!(&self.codex_op_target, CodexOpTarget::Direct(_))
+            && !self.agent_turn_running
+        {
+            self.prepare_idle_timing_submission_for_turn_start()
+        } else {
+            None
+        };
 
-        if !self.submit_op(op) {
-            return;
+        if let Some(submission) = idle_timing_submission.as_ref() {
+            if !self.submit_op(AppCommand::override_turn_context(
+                Some(self.config.cwd.to_path_buf()),
+                Some(self.config.permissions.approval_policy.value()),
+                /*approvals_reviewer*/ None,
+                Some(self.config.permissions.sandbox_policy.get().clone()),
+                /*windows_sandbox_level*/ None,
+                Some(effective_mode.model().to_string()),
+                Some(effective_mode.reasoning_effort()),
+                /*summary*/ None,
+                service_tier,
+                collaboration_mode,
+                personality,
+            )) {
+                return;
+            }
+
+            if !self.submit_op(Op::UserInputWithPrefixedItems {
+                prefixed_items: vec![ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: submission.developer_message.clone(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }],
+                items,
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+            }) {
+                return;
+            }
+            self.finish_idle_timing_turn_start_submission(submission.clone());
+        } else {
+            let op = AppCommand::user_turn(
+                items,
+                self.config.cwd.to_path_buf(),
+                self.config.permissions.approval_policy.value(),
+                self.config.permissions.sandbox_policy.get().clone(),
+                effective_mode.model().to_string(),
+                effective_mode.reasoning_effort(),
+                /*summary*/ None,
+                service_tier,
+                /*final_output_json_schema*/ None,
+                collaboration_mode,
+                personality,
+            );
+
+            if !self.submit_op(op) {
+                return;
+            }
         }
 
         // Persist the text to cross-session message history. Mentions are
@@ -6013,7 +6120,9 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
+                self.idle_timing_state.reset_for_compaction(Local::now());
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
+                self.refresh_status_line();
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -6391,6 +6500,12 @@ impl ChatWidget {
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
+                if replay_kind.is_some() {
+                    self.restore_idle_timing_from_completed_turn(
+                        notification.turn.completed_at,
+                        notification.turn.duration_ms,
+                    );
+                }
                 self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
             }
             TurnStatus::Interrupted => {
@@ -6710,8 +6825,14 @@ impl ChatWidget {
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
+                completed_at,
+                duration_ms,
+                last_agent_message,
+                ..
             }) => {
+                if from_replay {
+                    self.restore_idle_timing_from_completed_turn(completed_at, duration_ms);
+                }
                 self.on_task_complete(last_agent_message, from_replay);
             }
             EventMsg::TokenCount(ev) => {
@@ -6823,7 +6944,10 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => {}
+            EventMsg::ContextCompacted(_) => {
+                self.idle_timing_state.reset_for_compaction(Local::now());
+                self.refresh_status_line();
+            }
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -7303,12 +7427,13 @@ impl ChatWidget {
 
     fn status_line_reasoning_effort_label(effort: Option<ReasoningEffortConfig>) -> &'static str {
         match effort {
+            Some(ReasoningEffortConfig::None) => "off",
             Some(ReasoningEffortConfig::Minimal) => "minimal",
             Some(ReasoningEffortConfig::Low) => "low",
             Some(ReasoningEffortConfig::Medium) => "medium",
             Some(ReasoningEffortConfig::High) => "high",
             Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
+            None => "default",
         }
     }
 
@@ -9514,7 +9639,25 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
+    fn set_idle_timing_injection_enabled(&mut self, enabled: bool) {
+        self.idle_timing_state.set_injection_enabled(enabled);
+        let status = if enabled { "enabled" } else { "disabled" };
+        self.add_info_message(
+            format!("Idle timing injection {status}."),
+            /*hint*/ None,
+        );
+    }
+
     #[cfg(test)]
+    pub(crate) fn idle_timing_state_mut(&mut self) -> &mut IdleTimingState {
+        &mut self.idle_timing_state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn idle_timing_injection_enabled(&self) -> bool {
+        self.idle_timing_state.injection_enabled()
+    }
+
     pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
         self.active_mode_kind()
     }
@@ -9681,12 +9824,13 @@ impl ChatWidget {
             let mut message = format!("Model changed to {next_model}");
             if !next_model.starts_with("codex-auto-") {
                 let reasoning_label = match next_effort {
+                    Some(ReasoningEffortConfig::None) => "off",
                     Some(ReasoningEffortConfig::Minimal) => "minimal",
                     Some(ReasoningEffortConfig::Low) => "low",
                     Some(ReasoningEffortConfig::Medium) => "medium",
                     Some(ReasoningEffortConfig::High) => "high",
                     Some(ReasoningEffortConfig::XHigh) => "xhigh",
-                    None | Some(ReasoningEffortConfig::None) => "default",
+                    None => "default",
                 };
                 message.push(' ');
                 message.push_str(reasoning_label);

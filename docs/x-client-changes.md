@@ -87,6 +87,20 @@ integrations:
   `assistant`, and `developer`.
 - `thread/inject_messages` does not accept `system`. System-prompt replacement
   should continue to use the base-instructions path instead.
+- `thread/import_transcript` creates a fresh thread from host-supplied typed
+  messages. This is the new app-server path for Thin’s per-turn context
+  reconstruction experiments when the supplied transcript should become the
+  entire model-visible history for the new thread.
+- `thread/import_transcript` accepts the same typed message roles as
+  `thread/inject_messages` and likewise rejects `system`. Use
+  `baseInstructions` when the host needs to replace the system prompt.
+- `thread/import_transcript` optionally accepts `sourceThreadId` so the new
+  thread can inherit defaults such as cwd and persisted model metadata from an
+  existing thread while still using the supplied transcript as truth.
+- When `thread/import_transcript` uses `sourceThreadId`, app-server releases the
+  importing connection’s subscription to the source thread after success so the
+  existing idle-unload path can reclaim that old loaded thread if nothing else
+  is using it.
 - `codex` CLI now exposes the thin-style minimal-context bundle behind
   `--text-provider`, with `--minimal-context` retained as an alias.
 

@@ -245,6 +245,7 @@ pub(crate) fn build_turn_start_request(
                 text: request.text,
                 text_elements: Vec::new(),
             }],
+            prefixed_messages: None,
             responsesapi_client_metadata: None,
             cwd: request.cwd,
             approval_policy: request.approval_policy,

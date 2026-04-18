@@ -139,22 +139,29 @@ impl ChatWidget {
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(/*status_line*/ None);
+            self.set_status_line_right(/*status_line*/ None);
             return;
         }
 
-        let mut parts = Vec::new();
+        let mut left_parts = Vec::new();
+        let mut right_line = None;
         for item in &selections.status_line_items {
             if let Some(value) = self.status_line_value_for_item(item) {
-                parts.push(value);
+                if *item == StatusLineItem::IdleTime {
+                    right_line = Some(Line::from(value));
+                } else {
+                    left_parts.push(value);
+                }
             }
         }
 
-        let line = if parts.is_empty() {
+        let line = if left_parts.is_empty() {
             None
         } else {
-            Some(Line::from(parts.join(" · ")))
+            Some(Line::from(left_parts.join(" · ")))
         };
         self.set_status_line(line);
+        self.set_status_line_right(right_line);
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -275,7 +282,7 @@ impl ChatWidget {
     /// Parses configured status-line ids into known items and collects unknown ids.
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
-    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+    pub(super) fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
         parse_items_with_invalids(self.configured_status_line_items())
     }
 
@@ -452,10 +459,10 @@ impl ChatWidget {
             }
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
-                .map(|remaining| format!("Context {remaining}% left")),
+                .map(|remaining| format!("Ctx {remaining}% left")),
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
-                .map(|used| format!("Context {used}% used")),
+                .map(|used| format!("Ctx {used}% used")),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -481,7 +488,7 @@ impl ChatWidget {
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
-                .map(|cws| format!("{} window", format_tokens_compact(cws))),
+                .map(|cws| format!("{} ctx", format_tokens_compact(cws))),
             StatusLineItem::TotalInputTokens => Some(format!(
                 "{} in",
                 format_tokens_compact(self.status_line_total_usage().input_tokens)
@@ -502,6 +509,13 @@ impl ChatWidget {
                 let trimmed = name.trim();
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             }),
+            StatusLineItem::IdleTime => {
+                let value = self
+                    .idle_timing_state
+                    .status_line_value(self.current_model(), Local::now())?;
+                self.frame_requester.schedule_frame_in(value.refresh_in);
+                Some(value.text)
+            }
         }
     }
 

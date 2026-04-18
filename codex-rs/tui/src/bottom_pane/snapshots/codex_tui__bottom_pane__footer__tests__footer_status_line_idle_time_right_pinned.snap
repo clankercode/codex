@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/footer.rs
+assertion_line: 1299
+expression: terminal.backend()
+---
+"  gpt-5.4 high · codex · maste… 2m 13s  "

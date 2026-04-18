@@ -24,6 +24,8 @@ use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::InjectedMessage;
+use codex_app_server_protocol::InjectedMessageRole;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -594,6 +596,92 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["output_tokens"], 0);
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_prefixed_messages_are_included_in_first_request() -> Result<()> {
+    let response_mock = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &response_mock.uri(),
+        &response_mock.uri(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let prefixed_text = "[timing]\nidle_for=42.0s\n[/timing]";
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            prefixed_messages: Some(vec![InjectedMessage {
+                role: InjectedMessageRole::Developer,
+                text: prefixed_text.to_string(),
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock
+        .received_requests()
+        .await
+        .expect("received requests");
+    assert!(
+        !requests.is_empty(),
+        "expected at least one outbound model request"
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests.last().expect("last request").body)?;
+    let input = body["input"].as_array().expect("input array");
+    assert!(
+        input.iter().any(|item| {
+            item.get("role").and_then(serde_json::Value::as_str) == Some("developer")
+                && item
+                    .get("content")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|content| {
+                        content.get("text").and_then(serde_json::Value::as_str)
+                            == Some(prefixed_text)
+                    })
+        }),
+        "expected prefixed developer message in request body: {body}"
+    );
 
     Ok(())
 }
@@ -1426,6 +1514,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::LocalImage { path: image_path }],
+            prefixed_messages: None,
             ..Default::default()
         })
         .await?;
@@ -1808,6 +1897,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            prefixed_messages: None,
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -1850,6 +1940,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
+            prefixed_messages: None,
             responsesapi_client_metadata: None,
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),

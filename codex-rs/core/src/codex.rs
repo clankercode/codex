@@ -602,6 +602,7 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
+            compact_model: config.compact_model.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -852,6 +853,7 @@ pub(crate) struct TurnContext {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: ModelProviderInfo,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) runtime_reasoning_effort: Arc<RwLock<Option<ReasoningEffortConfig>>>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) environment: Option<Arc<Environment>>,
@@ -864,6 +866,7 @@ pub(crate) struct TurnContext {
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
+    pub(crate) compact_model: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
@@ -889,6 +892,17 @@ pub(crate) struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
 impl TurnContext {
+    pub(crate) async fn runtime_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        *self.runtime_reasoning_effort.read().await
+    }
+
+    pub(crate) async fn set_runtime_reasoning_effort(
+        &self,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+    ) {
+        *self.runtime_reasoning_effort.write().await = reasoning_effort;
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -979,6 +993,7 @@ impl TurnContext {
                 .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
             reasoning_effort,
+            runtime_reasoning_effort: Arc::new(RwLock::new(reasoning_effort)),
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             environment: self.environment.clone(),
@@ -988,6 +1003,7 @@ impl TurnContext {
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
+            compact_model: self.compact_model.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
             personality: self.personality,
@@ -1039,6 +1055,16 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    pub(crate) fn base_instructions(&self) -> BaseInstructions {
+        BaseInstructions {
+            text: self
+                .config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| self.model_info.get_model_instructions(self.personality)),
+        }
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
@@ -1152,6 +1178,9 @@ pub(crate) struct SessionConfiguration {
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
+
+    /// Optional model override used only for manual `/compact` turns.
+    compact_model: Option<String>,
 
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
@@ -1449,6 +1478,9 @@ impl Session {
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
+        per_turn_config.base_instructions = Some(session_configuration.base_instructions.clone());
+        per_turn_config.developer_instructions =
+            session_configuration.developer_instructions.clone();
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
@@ -1719,6 +1751,7 @@ impl Session {
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
+            runtime_reasoning_effort: Arc::new(RwLock::new(reasoning_effort)),
             reasoning_summary,
             session_source,
             environment,
@@ -1728,6 +1761,7 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
+            compact_model: session_configuration.compact_model.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
@@ -2673,6 +2707,36 @@ impl Session {
         );
     }
 
+    async fn refresh_active_turn_runtime_settings(
+        &self,
+        collaboration_mode: Option<&CollaborationMode>,
+    ) {
+        let Some(collaboration_mode) = collaboration_mode else {
+            return;
+        };
+        let reasoning_effort = collaboration_mode.reasoning_effort();
+        let turn_contexts = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .map(|active_turn| {
+                    active_turn
+                        .tasks
+                        .values()
+                        .map(|task| Arc::clone(&task.turn_context))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        for turn_context in turn_contexts {
+            if collaboration_mode.model() == turn_context.model_info.slug {
+                turn_context
+                    .set_runtime_reasoning_effort(reasoning_effort)
+                    .await;
+            }
+        }
+    }
+
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
@@ -2701,6 +2765,8 @@ impl Session {
                     self.refresh_managed_network_proxy_for_current_sandbox_policy()
                         .await;
                 }
+                self.refresh_active_turn_runtime_settings(updates.collaboration_mode.as_ref())
+                    .await;
                 if let Some(base_instructions) = base_instructions_for_rollout {
                     self.persist_base_instructions_update(base_instructions)
                         .await;
@@ -4960,6 +5026,7 @@ async fn spawn_review_thread(
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
+        runtime_reasoning_effort: Arc::new(RwLock::new(reasoning_effort)),
         reasoning_summary,
         session_source,
         environment: parent_turn_context.environment.clone(),
@@ -4972,6 +5039,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
+        compact_model: parent_turn_context.compact_model.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),

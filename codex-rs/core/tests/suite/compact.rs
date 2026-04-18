@@ -503,6 +503,94 @@ async fn manual_compact_uses_custom_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_uses_configured_compact_model_only_for_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("initial-assistant", FIRST_REPLY),
+                ev_completed("initial-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("compact-assistant", SUMMARY_TEXT),
+                ev_completed("compact-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("follow-up-assistant", FINAL_REPLY),
+                ev_completed("follow-up-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    let original_model = "gpt-5.3-codex";
+    let compact_model = "gpt-5-codex-mini";
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_model(original_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.compact_model = Some(compact_model.to_string());
+            set_test_compact_prompt(config);
+        })
+        .build(&server)
+        .await
+        .expect("create conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected initial, compact, and follow-up requests"
+    );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(original_model)
+    );
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(compact_model)
+    );
+    assert_eq!(
+        requests[2].body_json()["model"].as_str(),
+        Some(original_model)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_emits_api_and_local_token_usage_events() {
     skip_if_no_network!();
 
@@ -1839,6 +1927,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     let server = MockServer::start().await;
     let previous_model = "gpt-5.2-codex";
     let next_model = "gpt-5.1-codex-max";
+    let resumed_base_instructions = "RESUMED_SESSION_BASE_INSTRUCTIONS";
 
     let models_mock = mount_models_once(
         &server,
@@ -1876,6 +1965,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .with_model(previous_model)
         .with_config(move |config| {
             config.model_provider = model_provider;
+            config.base_instructions = Some(resumed_base_instructions.to_string());
             set_test_compact_prompt(config);
         });
     let initial = initial_builder
@@ -1967,6 +2057,14 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         requests.len(),
         3,
         "expected user, compact, and follow-up requests"
+    );
+    assert_eq!(
+        requests[1]
+            .body_json()
+            .get("instructions")
+            .and_then(|value| value.as_str()),
+        Some(resumed_base_instructions),
+        "resumed pre-sampling compaction should reuse the persisted session base instructions"
     );
     assert_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),

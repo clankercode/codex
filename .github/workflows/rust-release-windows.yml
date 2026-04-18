@@ -31,6 +31,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      CODEX_RELEASE_BUILD: "1"
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
 
     strategy:
@@ -130,6 +131,8 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      CODEX_RELEASE_BUILD: "1"
 
     strategy:
       fail-fast: false

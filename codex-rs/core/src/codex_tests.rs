@@ -2210,6 +2210,7 @@ async fn set_rate_limits_retains_previous_credits() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2312,6 +2313,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2471,6 +2473,26 @@ async fn turn_context_with_model_updates_model_fields() {
     ));
 }
 
+#[tokio::test]
+async fn turn_context_runtime_reasoning_effort_can_change_without_rewriting_snapshot() {
+    let (_session, turn_context) = make_session_and_context().await;
+
+    assert_eq!(
+        turn_context.runtime_reasoning_effort().await,
+        turn_context.reasoning_effort
+    );
+
+    turn_context
+        .set_runtime_reasoning_effort(Some(ReasoningEffortConfig::High))
+        .await;
+
+    assert_eq!(
+        turn_context.runtime_reasoning_effort().await,
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(turn_context.reasoning_effort, None);
+}
+
 #[test]
 fn falls_back_to_content_when_structured_is_null() {
     let ctr = McpCallToolResult {
@@ -2567,7 +2589,7 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
     }
 }
 
-async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
+async fn attach_rollout_recorder(session: &Session) -> PathBuf {
     let config = session.get_config().await;
     let recorder = RolloutRecorder::new(
         config.as_ref(),
@@ -2664,6 +2686,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2934,6 +2957,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -3038,6 +3062,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -3255,6 +3280,7 @@ async fn make_session_with_config_and_rx(
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -4001,6 +4027,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .clone()
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
         compact_prompt: config.compact_prompt.clone(),
+        compact_model: config.compact_model.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -4364,6 +4391,29 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     assert!(environment_update.contains("<network enabled=\"true\">"));
     assert!(environment_update.contains("<allowed>api.example.com</allowed>"));
     assert!(environment_update.contains("<denied>blocked.example.com</denied>"));
+}
+
+#[tokio::test]
+async fn with_model_updates_base_instructions_for_new_model() {
+    let (session, previous_context) = make_session_and_context().await;
+    let previous_context = Arc::new(previous_context);
+    let compact_model = "gpt-5-codex-mini".to_string();
+
+    let current_context = previous_context
+        .with_model(compact_model.clone(), &session.services.models_manager)
+        .await;
+
+    assert_eq!(current_context.model_info.slug, compact_model);
+    assert_eq!(
+        current_context.base_instructions().text,
+        current_context
+            .model_info
+            .get_model_instructions(current_context.personality),
+    );
+    assert_ne!(
+        current_context.base_instructions().text,
+        previous_context.base_instructions().text,
+    );
 }
 
 #[tokio::test]

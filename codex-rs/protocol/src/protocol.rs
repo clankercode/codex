@@ -415,6 +415,23 @@ pub enum Op {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
+    /// Similar to [`Op::UserInput`], but prefixes the turn with additional
+    /// already-typed model-visible history items when the input starts a fresh
+    /// turn instead of steering an active one.
+    UserInputWithPrefixedItems {
+        /// Model-visible history items to append immediately before the user
+        /// message when this starts a fresh turn.
+        prefixed_items: Vec<ResponseItem>,
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
+    },
+
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_thread::CodexThread`].
     UserTurn {
@@ -765,6 +782,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithPrefixedItems { .. } => "user_input_with_prefixed_items",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",

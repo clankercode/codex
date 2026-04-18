@@ -100,6 +100,7 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
 mod tests {
     use super::LoadedSubagentThread;
     use super::find_loaded_subagent_threads_for_primary;
+    use crate::version::CODEX_CLI_VERSION;
     use codex_app_server_protocol::SessionSource;
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadStatus;
@@ -121,7 +122,7 @@ mod tests {
             status: ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),
-            cli_version: "0.0.0".to_string(),
+            cli_version: CODEX_CLI_VERSION.to_string(),
             source,
             agent_nickname: None,
             agent_role: None,

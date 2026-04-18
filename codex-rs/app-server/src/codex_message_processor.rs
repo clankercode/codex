@@ -72,6 +72,7 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
+use codex_app_server_protocol::InjectedMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -136,6 +137,8 @@ use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadImportTranscriptParams;
+use codex_app_server_protocol::ThreadImportTranscriptResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
@@ -185,6 +188,8 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ThreadUpdateParams;
+use codex_app_server_protocol::ThreadUpdateResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -491,6 +496,21 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+}
+
+struct HistoryThreadResponseContext {
+    thread_id: ThreadId,
+    codex_thread: Arc<CodexThread>,
+    thread: Thread,
+    model: String,
+    model_provider: String,
+    service_tier: Option<codex_protocol::config_types::ServiceTier>,
+    cwd: AbsolutePathBuf,
+    instruction_sources: Vec<AbsolutePathBuf>,
+    approval_policy: AskForApproval,
+    approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer,
+    sandbox: codex_app_server_protocol::SandboxPolicy,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -891,6 +911,10 @@ impl CodexMessageProcessor {
                 self.thread_fork(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ThreadImportTranscript { request_id, params } => {
+                self.thread_import_transcript(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
                     .await;
@@ -905,6 +929,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadUpdate { request_id, params } => {
+                self.thread_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -2947,6 +2975,78 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn thread_update(&self, request_id: ConnectionRequestId, params: ThreadUpdateParams) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let ThreadUpdateParams {
+            thread_id: _,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+            base_instructions,
+            developer_instructions,
+        } = params;
+
+        let collaboration_modes_config = CollaborationModesConfig {
+            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+        };
+        let collaboration_mode = if let Some(mode) = collaboration_mode {
+            Some(self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config))
+        } else if model.is_some() || effort.is_some() {
+            Some(thread.collaboration_mode().await.with_updates(
+                model.clone(),
+                effort,
+                /*developer_instructions*/ None,
+            ))
+        } else {
+            None
+        };
+
+        match thread
+            .update_settings(SessionSettingsUpdate {
+                cwd,
+                approval_policy: approval_policy.map(AskForApproval::to_core),
+                approvals_reviewer: approvals_reviewer
+                    .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+                sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
+                windows_sandbox_level,
+                collaboration_mode,
+                reasoning_summary: summary,
+                service_tier,
+                personality,
+                base_instructions,
+                developer_instructions,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ThreadUpdateResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+            }
+        }
+    }
+
     async fn thread_memory_mode_set(
         &self,
         request_id: ConnectionRequestId,
@@ -3884,6 +3984,18 @@ impl CodexMessageProcessor {
         }
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
+        if include_turns
+            && let Some(loaded_thread) = loaded_thread.as_ref()
+            && let Err(err) = loaded_thread.flush_rollout().await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to flush loaded thread {thread_uuid} rollout: {err}"),
+            )
+            .await;
+            return;
+        }
+
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
                 Ok(items) => {
@@ -4099,132 +4211,201 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
-        let response_history = thread_history.clone();
-
-        match self
-            .thread_manager
-            .resume_thread_with_history(
+        let history_context = match self
+            .spawn_thread_from_history(
+                &request_id,
                 config,
-                thread_history,
-                self.auth_manager.clone(),
+                thread_history.clone(),
+                instruction_sources,
+                persisted_resume_metadata.as_ref(),
                 persist_extended_history,
-                self.request_trace_context(&request_id).await,
             )
             .await
         {
-            Ok(NewThread {
-                thread_id,
-                thread: codex_thread,
-                session_configured,
-            }) => {
-                let SessionConfiguredEvent { rollout_path, .. } = session_configured;
-                let Some(rollout_path) = rollout_path else {
-                    self.send_internal_error(
-                        request_id,
-                        format!("rollout path missing for thread {thread_id}"),
-                    )
-                    .await;
-                    return;
-                };
-                // Auto-attach a thread listener when resuming a thread.
-                Self::log_listener_attach_result(
-                    self.ensure_conversation_listener(
-                        thread_id,
-                        request_id.connection_id,
-                        /*raw_events_enabled*/ false,
-                        ApiVersion::V2,
-                    )
-                    .await,
-                    thread_id,
-                    request_id.connection_id,
-                    "thread",
-                );
+            Ok(context) => context,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
-                let mut thread = match self
-                    .load_thread_from_resume_source_or_send_internal(
-                        thread_id,
-                        codex_thread.as_ref(),
-                        &response_history,
-                        rollout_path.as_path(),
-                        fallback_model_provider.as_str(),
-                        persisted_resume_metadata.as_ref(),
-                    )
-                    .await
-                {
-                    Ok(thread) => thread,
-                    Err(message) => {
-                        self.send_internal_error(request_id, message).await;
-                        return;
-                    }
-                };
+        let response = ThreadResumeResponse {
+            thread: history_context.thread.clone(),
+            model: history_context.model,
+            model_provider: history_context.model_provider,
+            service_tier: history_context.service_tier,
+            cwd: history_context.cwd,
+            instruction_sources: history_context.instruction_sources,
+            approval_policy: history_context.approval_policy,
+            approvals_reviewer: history_context.approvals_reviewer,
+            sandbox: history_context.sandbox,
+            reasoning_effort: history_context.reasoning_effort,
+        };
+        if self.config.features.enabled(Feature::GeneralAnalytics) {
+            self.analytics_events_client.track_response(
+                request_id.connection_id.0,
+                ClientResponse::ThreadResume {
+                    request_id: request_id.request_id.clone(),
+                    response: response.clone(),
+                },
+            );
+        }
 
-                self.thread_watch_manager
-                    .upsert_thread(thread.clone())
-                    .await;
+        let connection_id = request_id.connection_id;
+        let token_usage_thread = response.thread.clone();
+        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+            &thread_history.get_rollout_items(),
+            &token_usage_thread,
+        );
+        self.outgoing.send_response(request_id, response).await;
+        send_thread_token_usage_update_to_connection(
+            &self.outgoing,
+            connection_id,
+            history_context.thread_id,
+            &token_usage_thread,
+            history_context.codex_thread.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
+    }
 
-                let thread_status = self
-                    .thread_watch_manager
-                    .loaded_status_for_thread(&thread.id)
-                    .await;
+    async fn thread_import_transcript(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadImportTranscriptParams,
+    ) {
+        let ThreadImportTranscriptParams {
+            source_thread_id,
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            config: mut request_overrides,
+            base_instructions,
+            developer_instructions,
+            personality,
+            ephemeral,
+            persist_extended_history,
+            messages,
+        } = params;
 
-                set_thread_status_and_interrupt_stale_turns(
-                    &mut thread,
-                    thread_status,
-                    /*has_live_in_progress_turn*/ false,
-                );
+        if messages.is_empty() {
+            self.send_invalid_request_error(request_id, "messages must not be empty".to_string())
+                .await;
+            return;
+        }
 
-                let response = ThreadResumeResponse {
-                    thread,
-                    model: session_configured.model,
-                    model_provider: session_configured.model_provider_id,
-                    service_tier: session_configured.service_tier,
-                    cwd: session_configured.cwd,
-                    instruction_sources,
-                    approval_policy: session_configured.approval_policy.into(),
-                    approvals_reviewer: session_configured.approvals_reviewer.into(),
-                    sandbox: session_configured.sandbox_policy.into(),
-                    reasoning_effort: session_configured.reasoning_effort,
-                };
-                if self.config.features.enabled(Feature::GeneralAnalytics) {
-                    self.analytics_events_client.track_response(
-                        request_id.connection_id.0,
-                        ClientResponse::ThreadResume {
-                            request_id: request_id.request_id.clone(),
-                            response: response.clone(),
-                        },
-                    );
-                }
+        let thread_history = InitialHistory::Forked(
+            messages
+                .into_iter()
+                .map(typed_message_to_response_item)
+                .map(RolloutItem::ResponseItem)
+                .collect(),
+        );
 
-                let connection_id = request_id.connection_id;
-                let token_usage_thread = response.thread.clone();
-                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                    &response_history.get_rollout_items(),
-                    &token_usage_thread,
-                );
-                self.outgoing.send_response(request_id, response).await;
-                // The client needs restored usage before it starts another turn.
-                // Sending after the response preserves JSON-RPC request ordering while
-                // still filling the status line before the next turn lifecycle begins.
-                send_thread_token_usage_update_to_connection(
-                    &self.outgoing,
-                    connection_id,
-                    thread_id,
-                    &token_usage_thread,
-                    codex_thread.as_ref(),
-                    token_usage_turn_id,
+        let mut typesafe_overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            base_instructions,
+            developer_instructions,
+            personality,
+        );
+        typesafe_overrides.ephemeral = ephemeral.then_some(true);
+
+        let mut persisted_resume_metadata = None;
+        let history_cwd = if let Some(source_thread_id) = source_thread_id.as_deref() {
+            let Some(source_history) = self
+                .resume_thread_from_rollout(request_id.clone(), source_thread_id, None)
+                .await
+            else {
+                return;
+            };
+            persisted_resume_metadata = self
+                .load_and_apply_persisted_resume_metadata(
+                    &source_history,
+                    &mut request_overrides,
+                    &mut typesafe_overrides,
                 )
                 .await;
-            }
+            source_history.session_cwd()
+        } else {
+            None
+        };
+
+        let cloud_requirements = self.current_cloud_requirements();
+        let cli_overrides = self.current_cli_overrides();
+        let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let config = match derive_config_for_cwd(
+            &cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            history_cwd,
+            &cloud_requirements,
+            &self.config.codex_home,
+            &runtime_feature_enablement,
+        )
+        .await
+        {
+            Ok(config) => config,
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error resuming thread: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
+                self.outgoing
+                    .send_error(request_id, config_load_error(&err))
+                    .await;
+                return;
             }
+        };
+
+        let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let history_context = match self
+            .spawn_thread_from_history(
+                &request_id,
+                config,
+                thread_history,
+                instruction_sources,
+                persisted_resume_metadata.as_ref(),
+                persist_extended_history,
+            )
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let response = ThreadImportTranscriptResponse {
+            thread: history_context.thread.clone(),
+            model: history_context.model,
+            model_provider: history_context.model_provider,
+            service_tier: history_context.service_tier,
+            cwd: history_context.cwd,
+            instruction_sources: history_context.instruction_sources,
+            approval_policy: history_context.approval_policy,
+            approvals_reviewer: history_context.approvals_reviewer,
+            sandbox: history_context.sandbox,
+            reasoning_effort: history_context.reasoning_effort,
+        };
+        self.outgoing
+            .send_response(request_id.clone(), response)
+            .await;
+
+        if let Some(source_thread_id) = source_thread_id
+            && let Ok(source_thread_id) = ThreadId::from_string(&source_thread_id)
+        {
+            let _ = self
+                .thread_state_manager
+                .unsubscribe_connection_from_thread(source_thread_id, request_id.connection_id)
+                .await;
         }
     }
 
@@ -4549,6 +4730,143 @@ impl CodexMessageProcessor {
         .await?;
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
+    }
+
+    async fn spawn_thread_from_history(
+        &self,
+        request_id: &ConnectionRequestId,
+        config: Config,
+        thread_history: InitialHistory,
+        instruction_sources: Vec<AbsolutePathBuf>,
+        persisted_resume_metadata: Option<&ThreadMetadata>,
+        persist_extended_history: bool,
+    ) -> Result<HistoryThreadResponseContext, JSONRPCErrorError> {
+        let fallback_model_provider = config.model_provider_id.clone();
+        let response_history = thread_history.clone();
+
+        match self
+            .thread_manager
+            .resume_thread_with_history(
+                config,
+                thread_history,
+                self.auth_manager.clone(),
+                persist_extended_history,
+                self.request_trace_context(request_id).await,
+            )
+            .await
+        {
+            Ok(NewThread {
+                thread_id,
+                thread: codex_thread,
+                session_configured,
+            }) => {
+                if let Err(err) = codex_thread.flush_rollout().await {
+                    return Err(JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!(
+                            "failed to flush initial history for thread {thread_id}: {err}"
+                        ),
+                        data: None,
+                    });
+                }
+
+                let SessionConfiguredEvent {
+                    rollout_path,
+                    model,
+                    model_provider_id,
+                    service_tier,
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    reasoning_effort,
+                    ..
+                } = session_configured;
+
+                Self::log_listener_attach_result(
+                    self.ensure_conversation_listener(
+                        thread_id,
+                        request_id.connection_id,
+                        /*raw_events_enabled*/ false,
+                        ApiVersion::V2,
+                    )
+                    .await,
+                    thread_id,
+                    request_id.connection_id,
+                    "thread",
+                );
+
+                let mut thread = if let Some(rollout_path) = rollout_path.as_ref() {
+                    self.load_thread_from_resume_source_or_send_internal(
+                        thread_id,
+                        codex_thread.as_ref(),
+                        &response_history,
+                        rollout_path.as_path(),
+                        fallback_model_provider.as_str(),
+                        persisted_resume_metadata,
+                    )
+                    .await
+                    .map_err(|message| JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message,
+                        data: None,
+                    })?
+                } else {
+                    let config_snapshot = codex_thread.config_snapshot().await;
+                    let mut thread =
+                        build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+                    let history_items = response_history.get_rollout_items();
+                    thread.preview = preview_from_rollout_items(&history_items);
+                    populate_thread_turns(
+                        &mut thread,
+                        ThreadTurnSource::HistoryItems(&history_items),
+                        /*active_turn*/ None,
+                    )
+                    .await
+                    .map_err(|message| JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message,
+                        data: None,
+                    })?;
+                    self.attach_thread_name(thread_id, &mut thread).await;
+                    thread
+                };
+
+                self.thread_watch_manager
+                    .upsert_thread(thread.clone())
+                    .await;
+
+                let thread_status = self
+                    .thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await;
+                set_thread_status_and_interrupt_stale_turns(
+                    &mut thread,
+                    thread_status,
+                    /*has_live_in_progress_turn*/ false,
+                );
+
+                Ok(HistoryThreadResponseContext {
+                    thread_id,
+                    codex_thread,
+                    thread,
+                    model,
+                    model_provider: model_provider_id,
+                    service_tier,
+                    cwd,
+                    instruction_sources,
+                    approval_policy: approval_policy.into(),
+                    approvals_reviewer: approvals_reviewer.into(),
+                    sandbox: sandbox_policy.into(),
+                    reasoning_effort,
+                })
+            }
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("error creating history-backed thread: {err}"),
+                data: None,
+            }),
+        }
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
@@ -6819,6 +7137,7 @@ impl CodexMessageProcessor {
         let TurnStartParams {
             thread_id: _,
             input,
+            prefixed_messages,
             responsesapi_client_metadata,
             cwd,
             approval_policy,
@@ -6845,6 +7164,11 @@ impl CodexMessageProcessor {
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
+        let prefixed_items = prefixed_messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(typed_message_to_response_item)
+            .collect::<Vec<_>>();
 
         let has_core_overrides = cwd.is_some()
             || approval_policy.is_some()
@@ -6895,10 +7219,19 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInput {
-                    items: mapped_items,
-                    final_output_json_schema: output_schema,
-                    responsesapi_client_metadata,
+                if prefixed_items.is_empty() {
+                    Op::UserInput {
+                        items: mapped_items,
+                        final_output_json_schema: output_schema,
+                        responsesapi_client_metadata,
+                    }
+                } else {
+                    Op::UserInputWithPrefixedItems {
+                        prefixed_items,
+                        items: mapped_items,
+                        final_output_json_schema: output_schema,
+                        responsesapi_client_metadata,
+                    }
                 },
             )
             .await;
@@ -7007,30 +7340,7 @@ impl CodexMessageProcessor {
         let items = params
             .messages
             .into_iter()
-            .map(|message| {
-                let (role, content) = match message.role {
-                    codex_app_server_protocol::InjectedMessageRole::Assistant => (
-                        "assistant".to_string(),
-                        vec![ContentItem::OutputText { text: message.text }],
-                    ),
-                    codex_app_server_protocol::InjectedMessageRole::Developer => (
-                        "developer".to_string(),
-                        vec![ContentItem::InputText { text: message.text }],
-                    ),
-                    codex_app_server_protocol::InjectedMessageRole::User => (
-                        "user".to_string(),
-                        vec![ContentItem::InputText { text: message.text }],
-                    ),
-                };
-
-                ResponseItem::Message {
-                    id: None,
-                    role,
-                    content,
-                    end_turn: None,
-                    phase: None,
-                }
-            })
+            .map(typed_message_to_response_item)
             .collect::<Vec<_>>();
 
         match thread.inject_response_items(items).await {
@@ -8894,6 +9204,31 @@ fn merge_persisted_resume_metadata(
             "model_reasoning_effort".to_string(),
             serde_json::Value::String(reasoning_effort.to_string()),
         );
+    }
+}
+
+fn typed_message_to_response_item(message: InjectedMessage) -> ResponseItem {
+    let (role, content) = match message.role {
+        codex_app_server_protocol::InjectedMessageRole::Assistant => (
+            "assistant".to_string(),
+            vec![ContentItem::OutputText { text: message.text }],
+        ),
+        codex_app_server_protocol::InjectedMessageRole::Developer => (
+            "developer".to_string(),
+            vec![ContentItem::InputText { text: message.text }],
+        ),
+        codex_app_server_protocol::InjectedMessageRole::User => (
+            "user".to_string(),
+            vec![ContentItem::InputText { text: message.text }],
+        ),
+    };
+
+    ResponseItem::Message {
+        id: None,
+        role,
+        content,
+        end_turn: None,
+        phase: None,
     }
 }
 

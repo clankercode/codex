@@ -112,6 +112,7 @@ use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -2427,6 +2428,9 @@ impl App {
                 personality,
             } => {
                 let mut should_start_turn = true;
+                let idle_timing_submission = self
+                    .chat_widget
+                    .prepare_idle_timing_submission_for_turn_start();
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut steer_turn_id = turn_id;
                     let mut retried_after_turn_mismatch = false;
@@ -2492,10 +2496,17 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let prefixed_messages = idle_timing_submission.as_ref().map(|submission| {
+                        vec![codex_app_server_protocol::InjectedMessage {
+                            role: codex_app_server_protocol::InjectedMessageRole::Developer,
+                            text: submission.developer_message.clone(),
+                        }]
+                    });
                     app_server
                         .turn_start(
                             thread_id,
                             items.to_vec(),
+                            prefixed_messages,
                             cwd.clone(),
                             approval_policy,
                             approvals_reviewer
@@ -2510,6 +2521,10 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                    if let Some(submission) = idle_timing_submission {
+                        self.chat_widget
+                            .finish_idle_timing_turn_start_submission(submission);
+                    }
                 }
                 Ok(true)
             }
@@ -2592,7 +2607,37 @@ impl App {
                 app_server.reload_user_config().await?;
                 Ok(true)
             }
-            AppCommandView::OverrideTurnContext { .. } => Ok(true),
+            AppCommandView::OverrideTurnContext {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            } => {
+                app_server
+                    .thread_update(
+                        thread_id,
+                        cwd.clone(),
+                        *approval_policy,
+                        *approvals_reviewer,
+                        sandbox_policy.clone(),
+                        *windows_sandbox_level,
+                        model.clone(),
+                        *effort,
+                        *summary,
+                        *service_tier,
+                        collaboration_mode.clone(),
+                        *personality,
+                    )
+                    .await?;
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }
@@ -4190,7 +4235,9 @@ impl App {
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
             let size = tui.terminal.size()?;
-            if size != tui.terminal.last_known_screen_size {
+            if size != tui.terminal.last_known_screen_size
+                || self.chat_widget.status_line_needs_live_refresh()
+            {
                 self.refresh_status_line();
             }
         }
@@ -6052,12 +6099,13 @@ impl App {
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
         match reasoning_effort {
+            Some(ReasoningEffortConfig::None) => "off",
             Some(ReasoningEffortConfig::Minimal) => "minimal",
             Some(ReasoningEffortConfig::Low) => "low",
             Some(ReasoningEffortConfig::Medium) => "medium",
             Some(ReasoningEffortConfig::High) => "high",
             Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
+            None => "default",
         }
     }
 
@@ -6075,8 +6123,13 @@ impl App {
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         // TODO(aibrahim): Remove this and don't use config as a state object.
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
-        self.config.model_reasoning_effort = effort;
-        self.chat_widget.set_reasoning_effort(effort);
+        if self.chat_widget.active_collaboration_mode_kind() == ModeKind::Plan {
+            self.config.plan_mode_reasoning_effort = effort;
+            self.chat_widget.set_plan_mode_reasoning_effort(effort);
+        } else {
+            self.config.model_reasoning_effort = effort;
+            self.chat_widget.set_reasoning_effort(effort);
+        }
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
@@ -6565,6 +6618,7 @@ mod tests {
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::collaboration_modes;
 
     use crate::chatwidget::ChatWidgetInit;
     use crate::chatwidget::create_initial_user_message;
@@ -7885,10 +7939,7 @@ mod tests {
             Some(950_000),
         )));
 
-        assert_eq!(
-            app.chat_widget.status_line_text(),
-            Some("950K window".into())
-        );
+        assert_eq!(app.chat_widget.status_line_text(), Some("950K ctx".into()));
     }
 
     #[tokio::test]
@@ -9273,7 +9324,7 @@ guardian_approval = true
                     status: codex_app_server_protocol::ThreadStatus::Idle,
                     path: Some(rollout_path.clone()),
                     cwd: test_path_buf("/tmp/agent").abs(),
-                    cli_version: "0.0.0".to_string(),
+                    cli_version: CODEX_CLI_VERSION.to_string(),
                     source: codex_app_server_protocol::SessionSource::Unknown,
                     agent_nickname: Some("Robie".to_string()),
                     agent_role: Some("explorer".to_string()),
@@ -9354,7 +9405,7 @@ guardian_approval = true
                     status: codex_app_server_protocol::ThreadStatus::Idle,
                     path: None,
                     cwd: test_path_buf("/tmp/agent").abs(),
-                    cli_version: "0.0.0".to_string(),
+                    cli_version: CODEX_CLI_VERSION.to_string(),
                     source: codex_app_server_protocol::SessionSource::Unknown,
                     agent_nickname: Some("Robie".to_string()),
                     agent_role: Some("explorer".to_string()),
@@ -10662,6 +10713,32 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn update_reasoning_effort_updates_plan_mode_override_when_plan_active() {
+        let mut app = make_test_app().await;
+        let plan_mask = collaboration_modes::mask_for_kind(
+            app.chat_widget.model_catalog().as_ref(),
+            ModeKind::Plan,
+        )
+        .expect("plan mask");
+        app.chat_widget.set_collaboration_mask(plan_mask);
+
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.config.plan_mode_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
@@ -11353,7 +11430,7 @@ guardian_approval = true
                     status: codex_app_server_protocol::ThreadStatus::Idle,
                     path: None,
                     cwd: test_path_buf("/tmp/project").abs(),
-                    cli_version: "0.0.0".to_string(),
+                    cli_version: CODEX_CLI_VERSION.to_string(),
                     source: SessionSource::Cli.into(),
                     agent_nickname: None,
                     agent_role: None,
