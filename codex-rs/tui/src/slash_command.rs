@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Effort,
     Fast,
     Approvals,
     Permissions,
@@ -30,11 +31,10 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    IdleTime,
     Plan,
-    Goal,
     Collab,
     Agent,
-    Side,
     // Undo,
     Copy,
     Diff,
@@ -77,6 +77,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::IdleTime => "toggle hidden idle timing context for new turns",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -98,17 +99,14 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
-            SlashCommand::Fast => {
-                "toggle Fast mode to enable fastest inference with increased plan usage"
-            }
+            SlashCommand::Effort => "set live reasoning effort for the current session",
+            SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
-            SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
-            SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -117,7 +115,7 @@ impl SlashCommand {
             }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Memories => "configure memory use and generation",
-            SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
+            SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Logout => "log out of Codex",
@@ -139,20 +137,11 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
-                | SlashCommand::Goal
+                | SlashCommand::Effort
                 | SlashCommand::Fast
-                | SlashCommand::Mcp
-                | SlashCommand::Side
+                | SlashCommand::IdleTime
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
-        )
-    }
-
-    /// Whether this command remains available inside an active side conversation.
-    pub fn available_in_side_conversation(self) -> bool {
-        matches!(
-            self,
-            SlashCommand::Copy | SlashCommand::Diff | SlashCommand::Mention | SlashCommand::Status
         )
     }
 
@@ -189,14 +178,14 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
-            | SlashCommand::Goal
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit
-            | SlashCommand::Side => true,
+            | SlashCommand::IdleTime => true,
+            SlashCommand::Effort => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
@@ -242,10 +231,5 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
-    }
-
-    #[test]
-    fn goal_command_is_available_during_task() {
-        assert!(SlashCommand::Goal.available_during_task());
     }
 }

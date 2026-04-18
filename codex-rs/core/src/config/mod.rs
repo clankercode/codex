@@ -130,7 +130,10 @@ pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
-const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
+
+fn is_release_build() -> bool {
+    matches!(option_env!("CODEX_RELEASE_BUILD"), Some("1"))
+}
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -150,26 +153,24 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
 
 fn resolve_cli_auth_credentials_store_mode(
     configured: AuthCredentialsStoreMode,
-    package_version: &str,
+    is_release_build: bool,
 ) -> AuthCredentialsStoreMode {
-    match (package_version, configured) {
-        (
-            LOCAL_DEV_BUILD_VERSION,
-            AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto,
-        ) => AuthCredentialsStoreMode::File,
+    match (is_release_build, configured) {
+        (false, AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto) => {
+            AuthCredentialsStoreMode::File
+        }
         (_, mode) => mode,
     }
 }
 
 fn resolve_mcp_oauth_credentials_store_mode(
     configured: OAuthCredentialsStoreMode,
-    package_version: &str,
+    is_release_build: bool,
 ) -> OAuthCredentialsStoreMode {
-    match (package_version, configured) {
-        (
-            LOCAL_DEV_BUILD_VERSION,
-            OAuthCredentialsStoreMode::Keyring | OAuthCredentialsStoreMode::Auto,
-        ) => OAuthCredentialsStoreMode::File,
+    match (is_release_build, configured) {
+        (false, OAuthCredentialsStoreMode::Keyring | OAuthCredentialsStoreMode::Auto) => {
+            OAuthCredentialsStoreMode::File
+        }
         (_, mode) => mode,
     }
 }
@@ -329,6 +330,9 @@ pub struct Config {
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
+
+    /// Optional model override used only for manual `/compact` turns.
+    pub compact_model: Option<String>,
 
     /// Optional commit attribution text for commit message co-author trailers.
     ///
@@ -2137,6 +2141,14 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
+        let compact_model = cfg.compact_model.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
 
         let commit_attribution = cfg.commit_attribution;
 
@@ -2372,6 +2384,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            compact_model,
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
@@ -2381,14 +2394,14 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
                 cfg.cli_auth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
+                is_release_build(),
             ),
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
                 cfg.mcp_oauth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
+                is_release_build(),
             ),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),

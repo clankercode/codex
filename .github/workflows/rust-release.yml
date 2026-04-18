@@ -57,6 +57,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      CODEX_RELEASE_BUILD: "1"
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}

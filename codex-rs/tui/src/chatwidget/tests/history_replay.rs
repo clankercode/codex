@@ -931,6 +931,35 @@ async fn replayed_turn_started_does_not_mark_task_running() {
 }
 
 #[tokio::test]
+async fn replayed_turn_completion_restores_idle_timing_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["idle-time".to_string()]);
+
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+                started_at: Some(Local::now().timestamp().saturating_sub(4)),
+                completed_at: Some(Local::now().timestamp()),
+                duration_ms: Some(4_321),
+            },
+        }),
+        Some(ReplayKind::ResumeInitialMessages),
+    );
+
+    let submission = chat
+        .prepare_idle_timing_submission_for_turn_start()
+        .expect("idle timing submission");
+    assert!(submission.developer_message.contains("last_turn=4.3s"));
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Idle 0s".to_string()));
+}
+
+#[tokio::test]
 async fn thread_snapshot_replayed_turn_started_marks_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

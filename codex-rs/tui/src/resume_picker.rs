@@ -1500,6 +1500,7 @@ fn column_visibility(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::version::CODEX_CLI_VERSION;
     use chrono::Duration;
     use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -2042,7 +2043,7 @@ mod tests {
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),
-            cli_version: String::from("0.0.0"),
+            cli_version: CODEX_CLI_VERSION.to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
             agent_nickname: None,
             agent_role: None,

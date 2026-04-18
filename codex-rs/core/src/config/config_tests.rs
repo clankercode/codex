@@ -1958,7 +1958,7 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
         config.cli_auth_credentials_store_mode,
         resolve_cli_auth_credentials_store_mode(
             AuthCredentialsStoreMode::Keyring,
-            env!("CARGO_PKG_VERSION"),
+            is_release_build(),
         ),
     );
 
@@ -1981,7 +1981,7 @@ async fn config_resolves_default_oauth_store_mode() -> std::io::Result<()> {
         config.mcp_oauth_credentials_store_mode,
         resolve_mcp_oauth_credentials_store_mode(
             OAuthCredentialsStoreMode::Auto,
-            env!("CARGO_PKG_VERSION"),
+            is_release_build(),
         ),
     );
 
@@ -1993,26 +1993,29 @@ fn local_dev_builds_force_file_cli_auth_store_modes() {
     assert_eq!(
         resolve_cli_auth_credentials_store_mode(
             AuthCredentialsStoreMode::Keyring,
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         AuthCredentialsStoreMode::File,
     );
     assert_eq!(
         resolve_cli_auth_credentials_store_mode(
             AuthCredentialsStoreMode::Auto,
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         AuthCredentialsStoreMode::File,
     );
     assert_eq!(
         resolve_cli_auth_credentials_store_mode(
             AuthCredentialsStoreMode::Ephemeral,
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         AuthCredentialsStoreMode::Ephemeral,
     );
     assert_eq!(
-        resolve_cli_auth_credentials_store_mode(AuthCredentialsStoreMode::Keyring, "1.2.3"),
+        resolve_cli_auth_credentials_store_mode(
+            AuthCredentialsStoreMode::Keyring,
+            /*is_release_build*/ true,
+        ),
         AuthCredentialsStoreMode::Keyring,
     );
 }
@@ -2022,19 +2025,22 @@ fn local_dev_builds_force_file_mcp_oauth_store_modes() {
     assert_eq!(
         resolve_mcp_oauth_credentials_store_mode(
             OAuthCredentialsStoreMode::Keyring,
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         OAuthCredentialsStoreMode::File,
     );
     assert_eq!(
         resolve_mcp_oauth_credentials_store_mode(
             OAuthCredentialsStoreMode::Auto,
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         OAuthCredentialsStoreMode::File,
     );
     assert_eq!(
-        resolve_mcp_oauth_credentials_store_mode(OAuthCredentialsStoreMode::Keyring, "1.2.3"),
+        resolve_mcp_oauth_credentials_store_mode(
+            OAuthCredentialsStoreMode::Keyring,
+            /*is_release_build*/ true,
+        ),
         OAuthCredentialsStoreMode::Keyring,
     );
 }
@@ -2405,7 +2411,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         final_config.mcp_oauth_credentials_store_mode,
         resolve_mcp_oauth_credentials_store_mode(
             OAuthCredentialsStoreMode::Keyring,
-            env!("CARGO_PKG_VERSION"),
+            is_release_build(),
         ),
     );
 
@@ -3786,6 +3792,25 @@ async fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
         config.compact_prompt.as_deref(),
         Some("Use the compact override")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn loads_compact_model_from_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            compact_model: Some("  gpt-5-codex-mini  ".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.compact_model.as_deref(), Some("gpt-5-codex-mini"));
 
     Ok(())
 }
@@ -5312,7 +5337,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
                 Default::default(),
-                LOCAL_DEV_BUILD_VERSION,
+                /*is_release_build*/ false,
             ),
             mcp_oauth_callback_port: None,
             mcp_oauth_callback_url: None,
@@ -5365,6 +5390,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
+            compact_model: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -5509,7 +5535,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
@@ -5562,6 +5588,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compact_model: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -5660,7 +5687,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
@@ -5713,6 +5740,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compact_model: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -5796,7 +5824,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
-            LOCAL_DEV_BUILD_VERSION,
+            /*is_release_build*/ false,
         ),
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
@@ -5849,6 +5877,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compact_model: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,

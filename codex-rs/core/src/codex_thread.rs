@@ -1,22 +1,18 @@
 use crate::agent::AgentStatus;
+use crate::codex::Codex;
+use crate::codex::SessionSettingsUpdate;
+use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
-use crate::goals::GoalRuntimeEvent;
-use crate::session::Codex;
-use crate::session::SessionSettingsUpdate;
-use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -48,29 +44,11 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub permission_profile: PermissionProfile,
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
-}
-
-/// Turn context overrides that app-server validates before starting a turn.
-#[derive(Clone, Default)]
-pub struct CodexThreadTurnContextOverrides {
-    pub cwd: Option<PathBuf>,
-    pub approval_policy: Option<AskForApproval>,
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub sandbox_policy: Option<SandboxPolicy>,
-    pub permission_profile: Option<PermissionProfile>,
-    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
-    pub model: Option<String>,
-    pub effort: Option<Option<ReasoningEffort>>,
-    pub summary: Option<ReasoningSummary>,
-    pub service_tier: Option<Option<ServiceTier>>,
-    pub collaboration_mode: Option<CollaborationMode>,
-    pub personality: Option<Personality>,
 }
 
 pub struct CodexThread {
@@ -102,53 +80,6 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
-    }
-
-    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
-            .await
-    }
-
-    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-            .await
-    }
-
-    pub async fn prepare_external_goal_mutation(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
-            .await
-        {
-            tracing::warn!("failed to prepare external goal mutation: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { status })
-            .await
-        {
-            tracing::warn!("failed to apply external goal status runtime effects: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_clear(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
-            .await
-        {
-            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
-        }
     }
 
     #[doc(hidden)]
@@ -195,49 +126,13 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
-    pub async fn validate_turn_context_overrides(
-        &self,
-        overrides: CodexThreadTurnContextOverrides,
-    ) -> ConstraintResult<()> {
-        let CodexThreadTurnContextOverrides {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            collaboration_mode,
-            personality,
-        } = overrides;
-        let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
-            collaboration_mode
-        } else {
-            self.codex
-                .session
-                .collaboration_mode()
-                .await
-                .with_updates(model, effort, /*developer_instructions*/ None)
-        };
+    /// Update persistent session settings used for subsequent turns.
+    pub async fn update_settings(&self, updates: SessionSettingsUpdate) -> ConstraintResult<()> {
+        self.codex.update_settings(updates).await
+    }
 
-        let updates = SessionSettingsUpdate {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            windows_sandbox_level,
-            collaboration_mode: Some(collaboration_mode),
-            reasoning_summary: summary,
-            service_tier,
-            personality,
-            ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+    pub async fn collaboration_mode(&self) -> CollaborationMode {
+        self.codex.session.collaboration_mode().await
     }
 
     /// Update persistent session settings used for subsequent turns.

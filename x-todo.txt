@@ -2,7 +2,7 @@
 - [] stdout format and details (for thin)
 - [x] support replacing system prompt later
 - [] tool call passthrough/externally registered (external MCP passthrough too?)
-- [] compact statusline for ctx etc
+- [x] compact statusline for ctx etc
 - [x] add easy single CLI flag to disable as much built-in context as possible. see this comment from ~/src/codename-thin implementing a wrapper around codex:
 
 • [...] but Codex exposes them mostly as -c config overrides rather than dedicated CLI
@@ -117,7 +117,7 @@ Notes:
 
 ---
 
-- [ ] our build of codex reports v0.0.0 which causes some problems. remove the special case for this in the test and update it to use the most recent actual version number in git history. 
+- [x] our build of codex reports v0.0.0 which causes some problems. remove the special case for this in the test and update it to use the most recent actual version number in git history. 
 
 Sample demonstrating problem, starting codex:
 
@@ -134,8 +134,6 @@ codename-thin master  ✗ codex
 
 ---
 
-- [ ] support compacting using a lighter model. eg if we have been afk so LLM cache is cold, it is advantageous to compact using eg gpt-5.4-mini and then swap the model back to what it was so we can continue with lesser burden on state.
-- [ ] replicate ~/src/claude-inject-idle-time features, injection should be able to be enabled or disabled live (default on). also add status line option for idle time since last model turn. 
-- [ ] add `/effort [off|low|medium|high|xhigh]` command which can be used live (and during assistant's turn) to set the effort-level / thinking-level for the current session and model calls (should update immediately).
-
-
+- [x] support compacting using a lighter model. eg if we have been afk so LLM cache is cold, it is advantageous to compact using eg gpt-5.4-mini and then swap the model back to what it was so we can continue with lesser burden on state.
+- [x] replicate ~/src/claude-inject-idle-time features, injection should be able to be enabled or disabled live (default on). also add status line option for idle time since last model turn. 
+- [x] add `/effort [off|low|medium|high|xhigh]` command which can be used live (and during assistant's turn) to set the effort-level / thinking-level for the current session and model calls (should update immediately).

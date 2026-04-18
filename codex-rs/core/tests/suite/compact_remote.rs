@@ -1083,6 +1083,169 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_uses_configured_compact_model_only_for_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let original_model = "gpt-5.3-codex";
+    let compact_model = "gpt-5-codex-mini";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model(original_model)
+            .with_config(move |config| {
+                config.compact_model = Some(compact_model.to_string());
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let initial_request = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("initial-assistant", "initial reply"),
+            responses::ev_completed("initial-response"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "manual remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_request = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_COMPACT_MODEL_SUMMARY",
+    )
+    .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let follow_up_request = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("follow-up-assistant", "follow-up reply"),
+            responses::ev_completed("follow-up-response"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    assert_eq!(
+        initial_request.single_request().body_json()["model"].as_str(),
+        Some(original_model),
+    );
+    assert_eq!(
+        compact_request.single_request().body_json()["model"].as_str(),
+        Some(compact_model),
+    );
+    assert_eq!(
+        follow_up_request.single_request().body_json()["model"].as_str(),
+        Some(original_model),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_after_resume_uses_persisted_session_base_instructions() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let resumed_base_instructions = "RESUMED_REMOTE_BASE_INSTRUCTIONS";
+    let mut initial_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.base_instructions = Some(resumed_base_instructions.to_string());
+        });
+    let initial = initial_builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let codex = initial.codex.clone();
+
+    let initial_request = mount_sse_once(
+        &server,
+        sse(vec![
+            responses::ev_assistant_message("initial-assistant", "initial reply"),
+            responses::ev_completed("initial-response"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "persist base instructions".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        initial_request
+            .single_request()
+            .body_json()
+            .get("instructions")
+            .and_then(|value| value.as_str()),
+        Some(resumed_base_instructions),
+    );
+
+    codex.submit(Op::Shutdown).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let mut resumed_builder =
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let resumed = resumed_builder.resume(&server, home, rollout_path).await?;
+
+    let compact_request = responses::mount_compact_user_history_with_summary_once(
+        &server,
+        "REMOTE_COMPACT_RESUME_SUMMARY",
+    )
+    .await;
+
+    resumed.codex.submit(Op::Compact).await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_request
+            .single_request()
+            .body_json()
+            .get("instructions")
+            .and_then(|value| value.as_str()),
+        Some(resumed_base_instructions),
+        "resumed remote compact should reuse the persisted session base instructions"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

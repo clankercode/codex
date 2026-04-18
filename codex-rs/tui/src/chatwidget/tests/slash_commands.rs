@@ -1172,6 +1172,98 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn idle_time_usage_error_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/idle-time maybe");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /idle-time [on|off|status]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time maybe");
+}
+
+#[tokio::test]
+async fn effort_usage_error_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/effort maybe");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /effort [off|low|medium|high|xhigh|status]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/effort maybe");
+}
+
+#[tokio::test]
+async fn idle_time_command_is_available_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/idle-time off");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Idle timing injection disabled."),
+        "expected disable message, got: {rendered:?}"
+    );
+    assert!(!chat.idle_timing_injection_enabled());
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time off");
+}
+
+#[tokio::test]
+async fn effort_command_is_available_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/effort off");
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::None))
+        )),
+        "expected reasoning effort update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                effort: Some(Some(ReasoningEffortConfig::None)),
+                ..
+            })
+        )),
+        "expected live effort override op; events: {events:?}"
+    );
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::None)
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/effort off");
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -2011,6 +2103,37 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
 }
 
 #[tokio::test]
+async fn effort_slash_command_updates_local_reasoning_effort() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Effort, "high".to_string(), Vec::new());
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected reasoning effort update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                effort: Some(Some(ReasoningEffortConfig::High)),
+                ..
+            })
+        )),
+        "expected live effort override op; events: {events:?}"
+    );
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2126,6 +2249,28 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
             ..
         } => {}
         other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn user_turn_carries_effort_after_effort_command() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command_with_args(SlashCommand::Effort, "xhigh".to_string(), Vec::new());
+    let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            effort: Some(ReasoningEffortConfig::XHigh),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with xhigh effort, got {other:?}"),
     }
 }
 

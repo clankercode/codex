@@ -7122,6 +7122,7 @@ impl CodexMessageProcessor {
         let TurnStartParams {
             thread_id: _,
             input,
+            prefixed_messages,
             responsesapi_client_metadata,
             environments,
             cwd,
@@ -7147,7 +7148,7 @@ impl CodexMessageProcessor {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
         let environments: Option<Vec<TurnEnvironmentSelection>> =
-            params.environments.map(|environments| {
+            environments.map(|environments| {
                 environments
                     .into_iter()
                     .map(|environment| TurnEnvironmentSelection {
@@ -7169,6 +7170,11 @@ impl CodexMessageProcessor {
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
+        let prefixed_items = prefixed_messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(typed_message_to_response_item)
+            .collect::<Vec<_>>();
 
         let has_any_overrides = cwd.is_some()
             || approval_policy.is_some()
@@ -7239,7 +7245,37 @@ impl CodexMessageProcessor {
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if has_any_overrides {
+        let turn_op = if !prefixed_items.is_empty() {
+            if has_any_overrides {
+                let _ = self
+                    .submit_core_op(
+                        &request_id,
+                        thread.as_ref(),
+                        Op::OverrideTurnContext {
+                            cwd: cwd.clone(),
+                            approval_policy,
+                            approvals_reviewer,
+                            sandbox_policy: sandbox_policy.clone(),
+                            permission_profile: permission_profile.clone(),
+                            windows_sandbox_level: None,
+                            model: model.clone(),
+                            effort,
+                            summary,
+                            service_tier,
+                            collaboration_mode: collaboration_mode.clone(),
+                            personality,
+                        },
+                    )
+                    .await;
+            }
+            Op::UserInputWithPrefixedItems {
+                prefixed_items,
+                items: mapped_items,
+                environments,
+                final_output_json_schema: output_schema,
+                responsesapi_client_metadata,
+            }
+        } else if has_any_overrides {
             Op::UserInputWithTurnContext {
                 items: mapped_items,
                 environments,

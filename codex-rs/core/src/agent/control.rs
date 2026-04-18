@@ -1200,7 +1200,7 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
 
 pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
     match initial_operation {
-        Op::UserInput { items, .. } => items
+        Op::UserInput { items, .. } | Op::UserInputWithPrefixedItems { items, .. } => items
             .iter()
             .map(|item| match item {
                 UserInput::Text { text, .. } => text.clone(),

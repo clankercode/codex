@@ -91,23 +91,23 @@ async fn test_create_client_sets_default_headers() {
 
 #[test]
 fn test_invalid_suffix_is_sanitized() {
-    let prefix = "codex_cli_rs/0.0.0";
+    let prefix = concat!("codex_cli_rs/", env!("CARGO_PKG_VERSION"));
     let suffix = "bad\rsuffix";
 
     assert_eq!(
         sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-        "codex_cli_rs/0.0.0 (bad_suffix)"
+        format!("{prefix} (bad_suffix)")
     );
 }
 
 #[test]
 fn test_invalid_suffix_is_sanitized2() {
-    let prefix = "codex_cli_rs/0.0.0";
+    let prefix = concat!("codex_cli_rs/", env!("CARGO_PKG_VERSION"));
     let suffix = "bad\0suffix";
 
     assert_eq!(
         sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-        "codex_cli_rs/0.0.0 (bad_suffix)"
+        format!("{prefix} (bad_suffix)")
     );
 }
 
@@ -118,7 +118,7 @@ fn test_macos() {
     let user_agent = get_codex_user_agent();
     let originator = regex_lite::escape(originator().value.as_str());
     let re = Regex::new(&format!(
-        r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
+        r"^{originator}/\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)? \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
     ))
     .unwrap();
     assert!(re.is_match(&user_agent));
