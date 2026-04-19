@@ -137,3 +137,43 @@ codename-thin master  ✗ codex
 - [x] support compacting using a lighter model. eg if we have been afk so LLM cache is cold, it is advantageous to compact using eg gpt-5.4-mini and then swap the model back to what it was so we can continue with lesser burden on state.
 - [x] replicate ~/src/claude-inject-idle-time features, injection should be able to be enabled or disabled live (default on). also add status line option for idle time since last model turn. 
 - [x] add `/effort [off|low|medium|high|xhigh]` command which can be used live (and during assistant's turn) to set the effort-level / thinking-level for the current session and model calls (should update immediately).
+
+---
+
+- [] Idle statusline element should, after user sends a message, change to showing the agent running time (ie time since last user message) while the agent is working (so it shows the complete runtime since last user's msg). It should also show the time since the last user steering message (which I guess technically involves a new turn, but the important distinction was that the agent was not idle at that time). It should show 3 things:
+  1. duration of current step.
+  2. (optional) time since last user steer (does not show up if user has not steered; state flag resets when idle)
+  3. time since last user message at idle
+
+user message at idle are normal prompts. agent finishes work, we're idle, then user sends message. 
+
+steering messages (that's what codex calls them) are user messages sent while the agent is active and they might count as a turn (technically i think yes but codex might not call them that, you'll need to check). 
+
+---
+
+### improvements to idle/timing messages in log
+
+see codex log for annotated example output
+
+- [] fix: the `[after Xm Ys]` -- it should not show up for steering messages that interrupt the agent (and if they were to show it should be [after 0s] because the agent was not idle).
+- [] when an agent finishes, we should add a message like: "[HH:MM | Δt 1h 2m 14s]", this can be our turn-timings row. It shows: the current time at finish and the duration that the agnets turn made (time since last user message). Then, while we're idle, we can update it every second with a suffixed " | Idle for Xm Ys". (Note: this should only be a visual update, no on-disk changes or whatever). We stop updating it when the user sends a message. 
+
+<code-log>
+
+<label> last msg from codex before waiting on bg script </label>
+• It is 09:40:48 AEST; Gemini reported reset around 10:19 AEST. There’s no active patent process to wait
+  on right now, so I’m waiting until just after the reset window and then I’ll relaunch the E2E run into
+  the same tmp.gemini31pro-2-pat.txt transcript.
+
+<label> then i interrupt </label>
+• Model interrupted to submit steer instructions.
+
+› Update instructions in .goal-loops/active-goal.md and AGENTS.md: goal-loop iterations should be tied to
+  patent generation run. Do not advance the iteration without first waiting for runners to return so you
+  can evaluate final results.
+  After that, continue waiting for the bg terminal
+
+<label> auto added when I sent </label>
+• [after 49m 23s]
+
+</codex-log>
