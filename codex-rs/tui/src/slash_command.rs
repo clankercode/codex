@@ -158,7 +158,6 @@ impl SlashCommand {
             | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Approvals
-            | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
@@ -186,6 +185,7 @@ impl SlashCommand {
             | SlashCommand::Exit
             | SlashCommand::IdleTime => true,
             SlashCommand::Effort => true,
+            SlashCommand::Permissions => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

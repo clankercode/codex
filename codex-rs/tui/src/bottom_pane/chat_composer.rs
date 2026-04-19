@@ -2440,6 +2440,7 @@ impl ChatComposer {
         }
 
         self.stage_slash_command_history();
+        self.textarea.set_text_clearing_elements("");
 
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
