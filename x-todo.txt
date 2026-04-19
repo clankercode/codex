@@ -180,9 +180,9 @@ see codex log for annotated example output
 
 ---
 
-- [ ] when I run `/effort abcd`, it works, but the command should be cleared from the chat input. 
-- [ ] investigate and implement if practical: `/permissions` should work when the agent is in-progress. (Currently it fails with an error)
-- [ ] `[17:00 | Δt 1m 31s | Idle for 0s]` is good, but the idle timer never updates (and it should; otherwise if its too expensive to do all the time, we should omit it and ideally only overwrite once when the user chats next. If that isn't possible, then remove it and we should add it back after the user sends their message -- oh and is it possible for it to be more compact? It currently takes up 2 lines after the user message, but it'd be better if it took up only 1.) Oh, and please update `[17:00 | Δt 1m 31s` to be like `[Agent finish @ HH:MM | Δt 1m 31s`, and have the HH:MM and Xm Ys parts be highlighted, like codeblocks in markdown or that sort of thing. 
-- [ ] 'Steer' in statusline counts from when the user pressed enter, but it should probably count from when the steering was injected
-- [ ] The statusline can show you going idle even when the agent is working. Somehow it's possible to trigger it to change from running to idle at some point without the agent actually stopping. might be related to waiting for subagents or something. 
-- [ ] The first message of a conversation should not get an 'After X' message after it. 
+- [x] when I run `/effort abcd`, it works, but the command should be cleared from the chat input. 
+- [x] investigate and implement if practical: `/permissions` should work when the agent is in-progress. (Currently it fails with an error)
+- [x] `[17:00 | Δt 1m 31s | Idle for 0s]` is good, but the idle timer never updates (and it should; otherwise if its too expensive to do all the time, we should omit it and ideally only overwrite once when the user chats next. If that isn't possible, then remove it and we should add it back after the user sends their message -- oh and is it possible for it to be more compact? It currently takes up 2 lines after the user message, but it'd be better if it took up only 1.) Oh, and please update `[17:00 | Δt 1m 31s` to be like `[Agent finish @ HH:MM | Δt 1m 31s`, and have the HH:MM and Xm Ys parts be highlighted, like codeblocks in markdown or that sort of thing. 
+- [x] 'Steer' in statusline counts from when the user pressed enter, but it should probably count from when the steering was injected
+- [x] The statusline can show you going idle even when the agent is working. Somehow it's possible to trigger it to change from running to idle at some point without the agent actually stopping. might be related to waiting for subagents or something. 
+- [x] The first message of a conversation should not get an 'After X' message after it. 

@@ -88,11 +88,12 @@ impl IdleTimingState {
         self.current_turn_started_by_user_message = true;
     }
 
-    pub(crate) fn record_steer_user_message(&mut self, submitted_at: Instant) {
+    pub(crate) fn record_steer_user_message(&mut self, _submitted_at: Instant) {
+        let injected_at = Instant::now();
         if self.in_flight_turn_started_at.is_none() {
-            self.in_flight_turn_started_at = Some(submitted_at);
+            self.in_flight_turn_started_at = Some(injected_at);
         }
-        self.last_steer_user_message_at = Some(submitted_at);
+        self.last_steer_user_message_at = Some(injected_at);
         self.current_turn_started_by_user_message = true;
     }
 
@@ -121,7 +122,9 @@ impl IdleTimingState {
         duration: Option<Duration>,
     ) {
         self.last_turn_duration = duration;
-        self.last_model_turn_completed_at = Some(completed_at);
+        if duration.is_some() {
+            self.last_model_turn_completed_at = Some(completed_at);
+        }
         self.model_at_last_model_turn = Some(model.to_string());
         self.in_flight_turn_started_at = None;
         self.last_steer_user_message_at = None;
@@ -164,6 +167,10 @@ impl IdleTimingState {
                 text,
                 refresh_in: STATUS_LINE_REFRESH_INTERVAL,
             });
+        }
+
+        if self.current_turn_started_by_user_message {
+            return None;
         }
 
         let idle = self.idle_since_last_model_turn(now)?;
@@ -230,7 +237,7 @@ fn format_idle_resume_note(idle: Duration) -> Option<String> {
         parts.push(format!("{minutes}m"));
     }
     parts.push(format!("{seconds}s"));
-    Some(format!("[after {}]", parts.join(" ")))
+    Some(format!("[Agent finish @ HH:MM | Δt {}]", parts.join(" ")))
 }
 
 #[cfg(test)]
@@ -289,7 +296,10 @@ mod tests {
             ]
             .join("\n")
         );
-        assert_eq!(submission.resume_note, Some("[after 14s]".to_string()));
+        assert_eq!(
+            submission.resume_note,
+            Some("[Agent finish @ HH:MM | Δt 14s]".to_string())
+        );
     }
 
     #[test]
@@ -310,15 +320,15 @@ mod tests {
     #[test]
     fn status_line_shows_running_turn_and_recent_steer() {
         let mut state = IdleTimingState::default();
-        let now = Instant::now();
-        state.record_turn_start_user_message(now - Duration::from_secs(95));
-        state.record_steer_user_message(now - Duration::from_secs(7));
+        let base = Instant::now();
+        state.record_turn_start_user_message(base - Duration::from_secs(95));
+        state.record_steer_user_message(base - Duration::from_secs(7));
 
         let display = state
-            .status_line_value_at("gpt-5.4", local_ts("2026-04-18T12:00:00+10:00"), now)
+            .status_line_value_at("gpt-5.4", local_ts("2026-04-18T12:00:00+10:00"), base)
             .expect("display");
 
-        assert_eq!(display.text, "Run 1m 35s · Steer 7s");
+        assert_eq!(display.text, "Run 1m 35s · Steer 0s");
         assert_eq!(display.refresh_in, Duration::from_secs(1));
     }
 
