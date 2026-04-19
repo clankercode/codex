@@ -87,6 +87,9 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -95,6 +98,8 @@ use unicode_width::UnicodeWidthStr;
 use url::Url;
 
 mod hook_cell;
+
+const TURN_TIMING_IDLE_ACTIVE: u64 = u64::MAX;
 
 pub(crate) use hook_cell::HookCell;
 pub(crate) use hook_cell::new_active_hook_cell;
@@ -2854,6 +2859,114 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TurnTimingIdleHandle {
+    idle_started_at: Instant,
+    idle_stopped_after_secs: Arc<AtomicU64>,
+}
+
+impl TurnTimingIdleHandle {
+    pub(crate) fn stop(&self, now: Instant) {
+        let elapsed_secs = now
+            .saturating_duration_since(self.idle_started_at)
+            .as_secs();
+        self.idle_stopped_after_secs
+            .store(elapsed_secs, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_updating(&self) -> bool {
+        self.idle_stopped_after_secs.load(Ordering::Relaxed) == TURN_TIMING_IDLE_ACTIVE
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct TurnTimingRow {
+    finished_at: chrono::DateTime<chrono::Local>,
+    turn_duration: Duration,
+    idle_started_at: Instant,
+    idle_stopped_after_secs: Arc<AtomicU64>,
+}
+
+impl TurnTimingRow {
+    #[cfg(test)]
+    pub(crate) fn stop_idle_updates(&self, idle_after: Duration) {
+        self.idle_stopped_after_secs
+            .store(idle_after.as_secs(), Ordering::Relaxed);
+    }
+
+    fn idle_secs(&self) -> u64 {
+        let stopped = self.idle_stopped_after_secs.load(Ordering::Relaxed);
+        if stopped == TURN_TIMING_IDLE_ACTIVE {
+            self.idle_started_at.elapsed().as_secs()
+        } else {
+            stopped
+        }
+    }
+}
+
+impl HistoryCell for TurnTimingRow {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let label = format!(
+            "[{} | Δt {} | Idle for {}]",
+            self.finished_at.format("%H:%M"),
+            format_duration_words(self.turn_duration),
+            format_duration_words(Duration::from_secs(self.idle_secs()))
+        );
+        vec![vec!["• ".dim(), label.dim()].into()]
+    }
+}
+
+pub(crate) fn new_turn_timing_row(
+    finished_at: chrono::DateTime<chrono::Local>,
+    turn_duration: Duration,
+    idle_started_at: Instant,
+) -> (TurnTimingRow, TurnTimingIdleHandle) {
+    let idle_stopped_after_secs = Arc::new(AtomicU64::new(TURN_TIMING_IDLE_ACTIVE));
+    (
+        TurnTimingRow {
+            finished_at,
+            turn_duration,
+            idle_started_at,
+            idle_stopped_after_secs: Arc::clone(&idle_stopped_after_secs),
+        },
+        TurnTimingIdleHandle {
+            idle_started_at,
+            idle_stopped_after_secs,
+        },
+    )
+}
+
+#[cfg(test)]
+fn new_turn_timing_row_for_test(
+    finished_at: &str,
+    turn_duration: Duration,
+    idle_after: Duration,
+) -> TurnTimingRow {
+    let finished_at = chrono::DateTime::parse_from_rfc3339(finished_at)
+        .expect("timestamp")
+        .with_timezone(&chrono::Local);
+    let (row, _handle) =
+        new_turn_timing_row(finished_at, turn_duration, Instant::now() - idle_after);
+    row
+}
+
+fn format_duration_words(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    let mut parts = Vec::new();
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 || hours > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    parts.push(format!("{seconds}s"));
+    parts.join(" ")
+}
+
 pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
     let mut parts = Vec::new();
     if summary.tool_calls.count > 0 {
@@ -3271,6 +3384,34 @@ mod tests {
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("Worked for"));
+    }
+
+    #[test]
+    fn turn_timing_row_renders_finish_time_turn_duration_and_live_idle() {
+        let cell = new_turn_timing_row_for_test(
+            "2026-04-18T12:34:56+10:00",
+            Duration::from_secs(3_734),
+            Duration::from_secs(75),
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+
+        insta::assert_snapshot!(
+            rendered.join("\n"),
+            @"• [12:34 | Δt 1h 2m 14s | Idle for 1m 15s]"
+        );
+    }
+
+    #[test]
+    fn turn_timing_row_freezes_idle_suffix_when_stopped() {
+        let cell = new_turn_timing_row_for_test(
+            "2026-04-18T12:34:56+10:00",
+            Duration::from_secs(14),
+            Duration::from_secs(75),
+        );
+        cell.stop_idle_updates(Duration::from_secs(21));
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+
+        assert_eq!(rendered, vec!["• [12:34 | Δt 14s | Idle for 21s]"]);
     }
 
     #[test]
