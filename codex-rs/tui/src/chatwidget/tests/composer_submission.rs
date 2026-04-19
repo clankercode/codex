@@ -900,8 +900,9 @@ async fn direct_submission_includes_idle_timing_prefix_when_enabled() {
 
 #[tokio::test]
 async fn direct_submission_skips_idle_timing_prefix_while_turn_running() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["idle-time".to_string()]);
     chat.agent_turn_running = true;
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.idle_timing_state_mut().restore_completed_turn(
@@ -939,6 +940,33 @@ async fn direct_submission_skips_idle_timing_prefix_while_turn_running() {
             assert_eq!(effort, chat.current_reasoning_effort());
         }
         other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    let status_line = status_line_text(&chat).expect("idle-time status line");
+    assert!(
+        status_line.starts_with("Run "),
+        "expected running status line, got {status_line:?}"
+    );
+    assert!(status_line.contains(" · Steer "));
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let rendered = cell
+                .display_lines(/*width*/ 200)
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| span.content.into_owned())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !rendered.contains("[after "),
+                "steering while active must not insert idle resume note: {rendered}"
+            );
+        }
     }
 }
 

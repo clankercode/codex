@@ -2428,9 +2428,6 @@ impl App {
                 personality,
             } => {
                 let mut should_start_turn = true;
-                let idle_timing_submission = self
-                    .chat_widget
-                    .prepare_idle_timing_submission_for_turn_start();
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut steer_turn_id = turn_id;
                     let mut retried_after_turn_mismatch = false;
@@ -2439,7 +2436,10 @@ impl App {
                             .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
                             .await
                         {
-                            Ok(_) => return Ok(true),
+                            Ok(_) => {
+                                self.chat_widget.record_idle_timing_steer_user_message();
+                                return Ok(true);
+                            }
                             Err(error) => {
                                 if let Some(turn_error) =
                                     active_turn_not_steerable_turn_error(&error)
@@ -2496,6 +2496,9 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let idle_timing_submission = self
+                        .chat_widget
+                        .prepare_idle_timing_submission_for_turn_start();
                     let prefixed_messages = idle_timing_submission.as_ref().map(|submission| {
                         vec![codex_app_server_protocol::InjectedMessage {
                             role: codex_app_server_protocol::InjectedMessageRole::Developer,
@@ -2525,6 +2528,8 @@ impl App {
                         self.chat_widget
                             .finish_idle_timing_turn_start_submission(submission);
                     }
+                    self.chat_widget
+                        .record_idle_timing_turn_start_user_message();
                 }
                 Ok(true)
             }
@@ -4235,10 +4240,15 @@ impl App {
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
             let size = tui.terminal.size()?;
+            let turn_timing_needs_refresh = self.chat_widget.turn_timing_row_needs_live_refresh();
             if size != tui.terminal.last_known_screen_size
                 || self.chat_widget.status_line_needs_live_refresh()
+                || turn_timing_needs_refresh
             {
                 self.refresh_status_line();
+                if turn_timing_needs_refresh {
+                    self.chat_widget.schedule_turn_timing_row_refresh();
+                }
             }
         }
 

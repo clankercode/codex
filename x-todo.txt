@@ -140,7 +140,7 @@ codename-thin master  ✗ codex
 
 ---
 
-- [] Idle statusline element should, after user sends a message, change to showing the agent running time (ie time since last user message) while the agent is working (so it shows the complete runtime since last user's msg). It should also show the time since the last user steering message (which I guess technically involves a new turn, but the important distinction was that the agent was not idle at that time). It should show 3 things:
+- [x] Idle statusline element should, after user sends a message, change to showing the agent running time (ie time since last user message) while the agent is working (so it shows the complete runtime since last user's msg). It should also show the time since the last user steering message (which I guess technically involves a new turn, but the important distinction was that the agent was not idle at that time). It should show 3 things:
   1. duration of current step.
   2. (optional) time since last user steer (does not show up if user has not steered; state flag resets when idle)
   3. time since last user message at idle
@@ -155,8 +155,8 @@ steering messages (that's what codex calls them) are user messages sent while th
 
 see codex log for annotated example output
 
-- [] fix: the `[after Xm Ys]` -- it should not show up for steering messages that interrupt the agent (and if they were to show it should be [after 0s] because the agent was not idle).
-- [] when an agent finishes, we should add a message like: "[HH:MM | Δt 1h 2m 14s]", this can be our turn-timings row. It shows: the current time at finish and the duration that the agnets turn made (time since last user message). Then, while we're idle, we can update it every second with a suffixed " | Idle for Xm Ys". (Note: this should only be a visual update, no on-disk changes or whatever). We stop updating it when the user sends a message. 
+- [x] fix: the `[after Xm Ys]` -- it should not show up for steering messages that interrupt the agent (and if they were to show it should be [after 0s] because the agent was not idle).
+- [x] when an agent finishes, we should add a message like: "[HH:MM | Δt 1h 2m 14s]", this can be our turn-timings row. It shows: the current time at finish and the duration that the agnets turn made (time since last user message). Then, while we're idle, we can update it every second with a suffixed " | Idle for Xm Ys". (Note: this should only be a visual update, no on-disk changes or whatever). We stop updating it when the user sends a message.
 
 <code-log>
 
@@ -177,3 +177,12 @@ see codex log for annotated example output
 • [after 49m 23s]
 
 </codex-log>
+
+---
+
+- [ ] when I run `/effort abcd`, it works, but the command should be cleared from the chat input. 
+- [ ] investigate and implement if practical: `/permissions` should work when the agent is in-progress. (Currently it fails with an error)
+- [ ] `[17:00 | Δt 1m 31s | Idle for 0s]` is good, but the idle timer never updates (and it should; otherwise if its too expensive to do all the time, we should omit it and ideally only overwrite once when the user chats next. If that isn't possible, then remove it and we should add it back after the user sends their message -- oh and is it possible for it to be more compact? It currently takes up 2 lines after the user message, but it'd be better if it took up only 1.) Oh, and please update `[17:00 | Δt 1m 31s` to be like `[Agent finish @ HH:MM | Δt 1m 31s`, and have the HH:MM and Xm Ys parts be highlighted, like codeblocks in markdown or that sort of thing. 
+- [ ] 'Steer' in statusline counts from when the user pressed enter, but it should probably count from when the steering was injected
+- [ ] The statusline can show you going idle even when the agent is working. Somehow it's possible to trigger it to change from running to idle at some point without the agent actually stopping. might be related to waiting for subagents or something. 
+- [ ] The first message of a conversation should not get an 'After X' message after it. 

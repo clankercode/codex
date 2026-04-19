@@ -984,6 +984,7 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     // Per-thread idle timing state used for hidden timing injection and idle status rendering.
     idle_timing_state: IdleTimingState,
+    turn_timing_idle_handle: Option<history_cell::TurnTimingIdleHandle>,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -1873,11 +1874,39 @@ impl ChatWidget {
             && self.idle_timing_state.needs_status_line_refresh()
     }
 
+    pub(crate) fn turn_timing_row_needs_live_refresh(&self) -> bool {
+        self.turn_timing_idle_handle
+            .as_ref()
+            .is_some_and(history_cell::TurnTimingIdleHandle::is_updating)
+    }
+
+    pub(crate) fn schedule_turn_timing_row_refresh(&self) {
+        if self.turn_timing_row_needs_live_refresh() {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_secs(1));
+        }
+    }
+
     pub(crate) fn prepare_idle_timing_submission_for_turn_start(
         &self,
     ) -> Option<PreparedIdleTimingSubmission> {
         self.idle_timing_state
             .prepare_turn_start_submission(Local::now())
+    }
+
+    pub(crate) fn record_idle_timing_turn_start_user_message(&mut self) {
+        if let Some(handle) = self.turn_timing_idle_handle.take() {
+            handle.stop(Instant::now());
+        }
+        self.idle_timing_state
+            .record_turn_start_user_message(Instant::now());
+        self.refresh_status_line();
+    }
+
+    pub(crate) fn record_idle_timing_steer_user_message(&mut self) {
+        self.idle_timing_state
+            .record_steer_user_message(Instant::now());
+        self.refresh_status_line();
     }
 
     pub(crate) fn finish_idle_timing_turn_start_submission(
@@ -2467,8 +2496,18 @@ impl ChatWidget {
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
             let current_model = self.current_model().to_string();
-            self.idle_timing_state
-                .complete_turn(&current_model, Local::now());
+            let completed_at = Local::now();
+            if let Some(duration) = self
+                .idle_timing_state
+                .complete_turn(&current_model, completed_at)
+                .filter(|duration| duration.as_secs() > 0)
+            {
+                let (row, handle) =
+                    history_cell::new_turn_timing_row(completed_at, duration, Instant::now());
+                self.turn_timing_idle_handle = Some(handle);
+                self.add_to_history(row);
+                self.schedule_turn_timing_row_refresh();
+            }
             self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
@@ -5026,6 +5065,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             idle_timing_state: IdleTimingState::default(),
+            turn_timing_idle_handle: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -5429,6 +5469,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_inner(user_message, /*allow_idle_timing_injection*/ true);
+    }
+
+    fn submit_user_message_inner(
+        &mut self,
+        user_message: UserMessage,
+        allow_idle_timing_injection: bool,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5632,13 +5680,14 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
-        let idle_timing_submission = if matches!(&self.codex_op_target, CodexOpTarget::Direct(_))
-            && !self.agent_turn_running
-        {
-            self.prepare_idle_timing_submission_for_turn_start()
-        } else {
-            None
-        };
+        let was_agent_turn_running = self.agent_turn_running;
+        let direct_target = matches!(&self.codex_op_target, CodexOpTarget::Direct(_));
+        let idle_timing_submission =
+            if allow_idle_timing_injection && direct_target && !was_agent_turn_running {
+                self.prepare_idle_timing_submission_for_turn_start()
+            } else {
+                None
+            };
 
         if let Some(submission) = idle_timing_submission.as_ref() {
             if !self.submit_op(AppCommand::override_turn_context(
@@ -5674,6 +5723,9 @@ impl ChatWidget {
                 return;
             }
             self.finish_idle_timing_turn_start_submission(submission.clone());
+            if direct_target {
+                self.record_idle_timing_turn_start_user_message();
+            }
         } else {
             let op = AppCommand::user_turn(
                 items,
@@ -5691,6 +5743,13 @@ impl ChatWidget {
 
             if !self.submit_op(op) {
                 return;
+            }
+            if direct_target {
+                if was_agent_turn_running {
+                    self.record_idle_timing_steer_user_message();
+                } else {
+                    self.record_idle_timing_turn_start_user_message();
+                }
             }
         }
 
@@ -7224,7 +7283,10 @@ impl ChatWidget {
             return;
         }
         if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+            self.submit_user_message_inner(
+                user_message,
+                /*allow_idle_timing_injection*/ false,
+            );
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();

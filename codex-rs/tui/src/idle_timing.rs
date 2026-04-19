@@ -16,6 +16,8 @@ pub(crate) struct IdleTimingState {
     last_turn_duration: Option<Duration>,
     model_at_last_model_turn: Option<String>,
     in_flight_turn_started_at: Option<Instant>,
+    last_steer_user_message_at: Option<Instant>,
+    current_turn_started_by_user_message: bool,
 }
 
 impl Default for IdleTimingState {
@@ -26,6 +28,8 @@ impl Default for IdleTimingState {
             last_turn_duration: None,
             model_at_last_model_turn: None,
             in_flight_turn_started_at: None,
+            last_steer_user_message_at: None,
+            current_turn_started_by_user_message: false,
         }
     }
 }
@@ -55,7 +59,7 @@ impl IdleTimingState {
         &self,
         now: DateTime<Local>,
     ) -> Option<PreparedIdleTimingSubmission> {
-        if !self.injection_enabled {
+        if !self.injection_enabled || self.in_flight_turn_started_at.is_some() {
             return None;
         }
 
@@ -72,16 +76,42 @@ impl IdleTimingState {
     }
 
     pub(crate) fn begin_turn(&mut self, started_at: Instant) {
-        self.in_flight_turn_started_at = Some(started_at);
+        if self.in_flight_turn_started_at.is_none() {
+            self.in_flight_turn_started_at = Some(started_at);
+            self.current_turn_started_by_user_message = false;
+        }
     }
 
-    pub(crate) fn complete_turn(&mut self, model: &str, completed_at: DateTime<Local>) {
-        self.last_turn_duration = self
+    pub(crate) fn record_turn_start_user_message(&mut self, submitted_at: Instant) {
+        self.in_flight_turn_started_at = Some(submitted_at);
+        self.last_steer_user_message_at = None;
+        self.current_turn_started_by_user_message = true;
+    }
+
+    pub(crate) fn record_steer_user_message(&mut self, submitted_at: Instant) {
+        if self.in_flight_turn_started_at.is_none() {
+            self.in_flight_turn_started_at = Some(submitted_at);
+        }
+        self.last_steer_user_message_at = Some(submitted_at);
+        self.current_turn_started_by_user_message = true;
+    }
+
+    pub(crate) fn complete_turn(
+        &mut self,
+        model: &str,
+        completed_at: DateTime<Local>,
+    ) -> Option<Duration> {
+        let duration = self
             .in_flight_turn_started_at
             .map(|started_at| started_at.elapsed());
+        self.last_turn_duration = duration;
         self.last_model_turn_completed_at = Some(completed_at);
         self.model_at_last_model_turn = Some(model.to_string());
         self.in_flight_turn_started_at = None;
+        self.last_steer_user_message_at = None;
+        let turn_started_by_user_message = self.current_turn_started_by_user_message;
+        self.current_turn_started_by_user_message = false;
+        turn_started_by_user_message.then_some(duration).flatten()
     }
 
     pub(crate) fn restore_completed_turn(
@@ -94,12 +124,16 @@ impl IdleTimingState {
         self.last_model_turn_completed_at = Some(completed_at);
         self.model_at_last_model_turn = Some(model.to_string());
         self.in_flight_turn_started_at = None;
+        self.last_steer_user_message_at = None;
+        self.current_turn_started_by_user_message = false;
     }
 
     pub(crate) fn reset_for_compaction(&mut self, now: DateTime<Local>) {
         self.last_model_turn_completed_at = Some(now);
         self.model_at_last_model_turn = None;
         self.in_flight_turn_started_at = None;
+        self.last_steer_user_message_at = None;
+        self.current_turn_started_by_user_message = false;
     }
 
     pub(crate) fn status_line_value(
@@ -107,6 +141,31 @@ impl IdleTimingState {
         current_model: &str,
         now: DateTime<Local>,
     ) -> Option<IdleStatusLineValue> {
+        self.status_line_value_at(current_model, now, Instant::now())
+    }
+
+    pub(crate) fn status_line_value_at(
+        &self,
+        current_model: &str,
+        now: DateTime<Local>,
+        now_instant: Instant,
+    ) -> Option<IdleStatusLineValue> {
+        if let Some(started_at) = self.in_flight_turn_started_at {
+            let runtime = now_instant.saturating_duration_since(started_at);
+            let mut text = format!("Run {}", fmt_elapsed_compact(runtime.as_secs()));
+            if let Some(steer_at) = self.last_steer_user_message_at {
+                let steer_age = now_instant.saturating_duration_since(steer_at);
+                text.push_str(&format!(
+                    " · Steer {}",
+                    fmt_elapsed_compact(steer_age.as_secs())
+                ));
+            }
+            return Some(IdleStatusLineValue {
+                text,
+                refresh_in: STATUS_LINE_REFRESH_INTERVAL,
+            });
+        }
+
         let idle = self.idle_since_last_model_turn(now)?;
         let text = if let Some(model) = self.model_at_last_model_turn.as_deref() {
             if model != current_model {
@@ -124,7 +183,7 @@ impl IdleTimingState {
     }
 
     pub(crate) fn needs_status_line_refresh(&self) -> bool {
-        self.last_model_turn_completed_at.is_some()
+        self.in_flight_turn_started_at.is_some() || self.last_model_turn_completed_at.is_some()
     }
 
     fn idle_since_last_model_turn(&self, now: DateTime<Local>) -> Option<Duration> {
@@ -231,6 +290,52 @@ mod tests {
             .join("\n")
         );
         assert_eq!(submission.resume_note, Some("[after 14s]".to_string()));
+    }
+
+    #[test]
+    fn active_turn_skips_idle_timing_submission() {
+        let mut state = IdleTimingState {
+            last_model_turn_completed_at: Some(local_ts("2026-04-18T12:00:00+10:00")),
+            last_turn_duration: Some(Duration::from_millis(4_321)),
+            ..Default::default()
+        };
+        state.record_turn_start_user_message(Instant::now());
+
+        assert_eq!(
+            state.prepare_turn_start_submission(local_ts("2026-04-18T12:00:14.900+10:00")),
+            None
+        );
+    }
+
+    #[test]
+    fn status_line_shows_running_turn_and_recent_steer() {
+        let mut state = IdleTimingState::default();
+        let now = Instant::now();
+        state.record_turn_start_user_message(now - Duration::from_secs(95));
+        state.record_steer_user_message(now - Duration::from_secs(7));
+
+        let display = state
+            .status_line_value_at("gpt-5.4", local_ts("2026-04-18T12:00:00+10:00"), now)
+            .expect("display");
+
+        assert_eq!(display.text, "Run 1m 35s · Steer 7s");
+        assert_eq!(display.refresh_in, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn completed_turn_resets_steer_status_line_state() {
+        let mut state = IdleTimingState::default();
+        let now = Instant::now();
+        state.record_turn_start_user_message(now - Duration::from_secs(95));
+        state.record_steer_user_message(now - Duration::from_secs(7));
+
+        state.complete_turn("gpt-5.4", local_ts("2026-04-18T12:00:00+10:00"));
+
+        let display = state
+            .status_line_value_at("gpt-5.4", local_ts("2026-04-18T12:00:12+10:00"), now)
+            .expect("display");
+
+        assert_eq!(display.text, "Idle 12s");
     }
 
     #[test]
