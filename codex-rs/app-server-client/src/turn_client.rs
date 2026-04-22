@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::AppServerRequestHandle;
 use crate::TypedRequestError;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -30,6 +31,7 @@ pub struct ThreadSessionRequest {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub base_instructions: Option<String>,
 }
 
@@ -39,6 +41,7 @@ pub struct TurnRequest {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +215,7 @@ pub(crate) fn build_thread_request(
                 model_provider: None,
                 cwd,
                 approval_policy: request.approval_policy,
+                approvals_reviewer: request.approvals_reviewer,
                 base_instructions: request.base_instructions,
                 ..Default::default()
             },
@@ -225,6 +229,7 @@ pub(crate) fn build_thread_request(
             model_provider: None,
             cwd,
             approval_policy: request.approval_policy,
+            approvals_reviewer: request.approvals_reviewer,
             base_instructions: request.base_instructions,
             experimental_raw_events: false,
             ..Default::default()
@@ -249,7 +254,7 @@ pub(crate) fn build_turn_start_request(
             responsesapi_client_metadata: None,
             cwd: request.cwd,
             approval_policy: request.approval_policy,
-            approvals_reviewer: None,
+            approvals_reviewer: request.approvals_reviewer,
             sandbox_policy: None,
             model: request.model,
             service_tier: None,
@@ -301,6 +306,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 cwd: Some(PathBuf::from("/tmp/project")),
                 approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
                 base_instructions: None,
             },
         );
@@ -312,6 +318,10 @@ mod tests {
                 assert_eq!(params.model, Some("gpt-5".to_string()));
                 assert_eq!(params.cwd, Some("/tmp/project".to_string()));
                 assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
+                assert_eq!(
+                    params.approvals_reviewer,
+                    Some(ApprovalsReviewer::GuardianSubagent)
+                );
             }
             other => panic!("expected ThreadResume request, got {other:?}"),
         }
@@ -326,6 +336,7 @@ mod tests {
                 model: None,
                 cwd: None,
                 approval_policy: None,
+                approvals_reviewer: Some(ApprovalsReviewer::User),
                 base_instructions: Some("system prompt".to_string()),
             },
         );
@@ -333,6 +344,7 @@ mod tests {
         match request {
             ClientRequest::ThreadStart { params, .. } => {
                 assert_eq!(params.base_instructions, Some("system prompt".to_string()));
+                assert_eq!(params.approvals_reviewer, Some(ApprovalsReviewer::User));
             }
             other => panic!("expected ThreadStart request, got {other:?}"),
         }
@@ -347,6 +359,7 @@ mod tests {
                 model: None,
                 cwd: None,
                 approval_policy: None,
+                approvals_reviewer: Some(ApprovalsReviewer::User),
                 base_instructions: Some("system prompt".to_string()),
             },
         );
@@ -354,6 +367,7 @@ mod tests {
         match request {
             ClientRequest::ThreadResume { params, .. } => {
                 assert_eq!(params.base_instructions, Some("system prompt".to_string()));
+                assert_eq!(params.approvals_reviewer, Some(ApprovalsReviewer::User));
             }
             other => panic!("expected ThreadResume request, got {other:?}"),
         }
@@ -369,6 +383,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 cwd: Some(PathBuf::from("/tmp/project")),
                 approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             },
         );
 
@@ -379,6 +394,10 @@ mod tests {
                 assert_eq!(params.model, Some("gpt-5".to_string()));
                 assert_eq!(params.cwd, Some(PathBuf::from("/tmp/project")));
                 assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
+                assert_eq!(
+                    params.approvals_reviewer,
+                    Some(ApprovalsReviewer::GuardianSubagent)
+                );
                 assert_eq!(
                     params.input,
                     vec![UserInput::Text {

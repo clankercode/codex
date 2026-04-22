@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+
+mod sideband;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -13,6 +16,7 @@ use codex_app_server_client::StdioAppServerClient;
 use codex_app_server_client::StdioAppServerConnectArgs;
 use codex_app_server_client::ThreadSessionRequest;
 use codex_app_server_client::TurnRequest;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -35,6 +39,11 @@ use codex_turn_start_bridge_core::ReleaseDecision;
 use codex_turn_start_bridge_core::XmlInputParser;
 use codex_turn_start_bridge_core::parse_prefixed_message;
 use codex_utils_cli::CliConfigOverrides;
+use sideband::ManagedServerRequest;
+use sideband::ServerRequestResolution;
+use sideband::SidebandOutputs;
+use sideband::SidebandResponseEvent;
+use sideband::ThreadResolvedPayload;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -67,7 +76,25 @@ struct Cli {
     cwd: Option<PathBuf>,
 
     #[arg(long)]
+    approvals_reviewer: Option<String>,
+
+    #[arg(long)]
     system_prompt: Option<String>,
+
+    #[arg(long = "thread-id-fd", value_name = "FD")]
+    thread_id_fd: Option<i32>,
+
+    #[arg(long = "server-request-events-fd", value_name = "FD")]
+    server_request_events_fd: Option<i32>,
+
+    #[arg(long = "server-request-responses-fd", value_name = "FD")]
+    server_request_responses_fd: Option<i32>,
+
+    #[arg(long = "control-events-fd", value_name = "FD")]
+    control_events_fd: Option<i32>,
+
+    #[arg(long = "control-responses-fd", value_name = "FD")]
+    control_responses_fd: Option<i32>,
 
     #[arg(long, value_enum, default_value_t = StdinFormat::Raw)]
     stdin_format: StdinFormat,
@@ -101,6 +128,36 @@ fn pre_main() {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let approval_policy = parse_approval_policy(&cli.approval_policy)?;
+    let approvals_reviewer = cli
+        .approvals_reviewer
+        .as_deref()
+        .map(parse_approvals_reviewer)
+        .transpose()?;
+    validate_sideband_platform_support(&cli)?;
+    let sideband_outputs = SidebandOutputs::from_fds(
+        cli.thread_id_fd,
+        cli.server_request_events_fd,
+        cli.control_events_fd,
+    )
+    .context("configure sideband outputs")?;
+    let mut sideband_response_rx = match (cli.server_request_responses_fd, cli.control_responses_fd)
+    {
+        (Some(_), Some(_)) => {
+            anyhow::bail!(
+                "--server-request-responses-fd and --control-responses-fd are mutually exclusive"
+            );
+        }
+        (Some(fd), None) | (None, Some(fd)) => {
+            if !sideband_outputs.has_request_event_sink() {
+                anyhow::bail!(
+                    "a sideband response fd requires either --server-request-events-fd or --control-events-fd"
+                );
+            }
+            Some(sideband::spawn_response_reader(fd).context("spawn sideband response reader")?)
+        }
+        (None, None) => None,
+    };
+    let mut sideband_response_available = sideband_response_rx.is_some();
     let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<ParsedMessage>();
     let (input_error_tx, mut input_error_rx) = mpsc::unbounded_channel::<String>();
     let mut stdin_closed = false;
@@ -142,8 +199,13 @@ async fn main() -> Result<()> {
     );
 
     let turn_client = CodexTurnClient::new(client.request_handle());
-    let thread_request = thread_session_request_from_cli(&cli, approval_policy, xml_system_prompt)
-        .context("build thread session request")?;
+    let thread_request = thread_session_request_from_cli(
+        &cli,
+        approval_policy,
+        approvals_reviewer,
+        xml_system_prompt,
+    )
+    .context("build thread session request")?;
     let thread_start = turn_client
         .start_or_resume_thread(
             if cli.thread_id.is_some() {
@@ -155,6 +217,14 @@ async fn main() -> Result<()> {
         )
         .await
         .context("start or resume thread")?;
+    let thread_resolved = if cli.thread_id.is_some() {
+        ThreadResolvedPayload::resumed(&thread_start.thread.id)
+    } else {
+        ThreadResolvedPayload::started(&thread_start.thread.id)
+    };
+    sideband_outputs
+        .emit_thread_resolved(&thread_resolved)
+        .context("write thread-id handoff")?;
     let mut session = thread_start.session;
     let mut controller = BridgeController::new(thread_start.thread.id.clone());
     restore_controller_from_thread(&mut controller, &thread_start.thread);
@@ -178,6 +248,7 @@ async fn main() -> Result<()> {
     let mut pending_start_request_id: Option<String> = None;
     let mut pending_request: Option<oneshot::Receiver<PendingRequestOutcome>> = None;
     let mut pending_decisions = VecDeque::new();
+    let mut pending_server_requests = HashMap::<RequestId, ManagedServerRequest>::new();
     for message in initial_messages {
         if let Some(decision) =
             controller.on_event(ControllerEvent::MessageReceived(parsed_to_queued(message)))
@@ -196,6 +267,7 @@ async fn main() -> Result<()> {
                 &session,
                 &cli,
                 approval_policy,
+                approvals_reviewer,
                 &mut next_request_id,
                 &mut pending_start_request_id,
                 &mut pending_request,
@@ -241,6 +313,9 @@ async fn main() -> Result<()> {
                     &mut session,
                     &mut controller,
                     &mut pending_start_request_id,
+                    &sideband_outputs,
+                    &mut pending_server_requests,
+                    sideband_response_available,
                     event,
                 ).await? {
                     pending_decisions.push_back(decision);
@@ -270,6 +345,76 @@ async fn main() -> Result<()> {
                     anyhow::bail!(error);
                 }
             }
+            sideband_event = async {
+                match sideband_response_rx.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match sideband_event {
+                    Some(SidebandResponseEvent::Response(response)) => {
+                        let Some(request) = pending_server_requests.remove(&response.request_id) else {
+                            eprintln!("turn-start bridge ignoring sideband response for unknown request id `{}`", response.request_id);
+                            continue;
+                        };
+                        match request.parse_response(response) {
+                            Ok(resolution) => {
+                                apply_server_request_resolution(
+                                    &mut client,
+                                    request.request_id().clone(),
+                                    resolution,
+                                )
+                                .await
+                                .context("apply sideband server-request resolution")?;
+                            }
+                            Err(err) => {
+                                let request_id = request.request_id().clone();
+                                client
+                                    .reject_server_request(
+                                        request_id,
+                                        JSONRPCErrorError {
+                                            code: -32602,
+                                            message: format!(
+                                                "turn-start bridge received an invalid sideband response: {err}"
+                                            ),
+                                            data: None,
+                                        },
+                                    )
+                                    .await
+                                    .context("reject invalid sideband response")?;
+                                return Err(err).context("invalid sideband response");
+                            }
+                        }
+                    }
+                    Some(SidebandResponseEvent::ParseError(message)) => {
+                        eprintln!("{message}");
+                    }
+                    Some(SidebandResponseEvent::ReadError(message)) => {
+                        resolve_pending_requests_on_response_close(
+                            &mut client,
+                            &mut pending_server_requests,
+                            &message,
+                        )
+                        .await?;
+                        anyhow::bail!(message);
+                    }
+                    Some(SidebandResponseEvent::Closed) | None => {
+                        sideband_response_available = false;
+                        sideband_response_rx = None;
+                        let close_message = "turn-start bridge sideband response channel closed";
+                        if pending_server_requests.is_empty() {
+                            continue;
+                        }
+                        resolve_pending_requests_on_response_close(
+                            &mut client,
+                            &mut pending_server_requests,
+                            close_message,
+                        )
+                        .await?;
+                        anyhow::bail!(close_message);
+                    }
+                }
+            }
         }
     }
 
@@ -289,6 +434,7 @@ fn parsed_to_queued(message: ParsedMessage) -> codex_turn_start_bridge_core::Que
 fn thread_session_request_from_cli(
     cli: &Cli,
     approval_policy: AskForApproval,
+    approvals_reviewer: Option<ApprovalsReviewer>,
     xml_system_prompt: Option<String>,
 ) -> Result<ThreadSessionRequest> {
     let base_instructions = match (cli.system_prompt.clone(), xml_system_prompt) {
@@ -304,6 +450,7 @@ fn thread_session_request_from_cli(
         model: cli.model.clone(),
         cwd: cli.cwd.clone(),
         approval_policy: Some(approval_policy),
+        approvals_reviewer,
         base_instructions,
     })
 }
@@ -331,11 +478,15 @@ fn restore_controller_from_thread(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_app_event(
     client: &mut AppServerClient,
     session: &mut CodexTurnSession,
     controller: &mut BridgeController,
     pending_start_request_id: &mut Option<String>,
+    sideband_outputs: &SidebandOutputs,
+    pending_server_requests: &mut HashMap<RequestId, ManagedServerRequest>,
+    sideband_response_available: bool,
     event: AppServerEvent,
 ) -> Result<Option<ReleaseDecision>> {
     match event {
@@ -343,14 +494,58 @@ async fn handle_app_event(
             anyhow::bail!("app-server disconnected: {message}");
         }
         AppServerEvent::ServerRequest(request) => {
-            client
-                .reject_server_request(
-                    request.id().clone(),
-                    unsupported_server_request_error(&request),
-                )
-                .await
-                .context("reject unsupported app-server request")?;
-            Err(unsupported_server_request_failure(&request))
+            if let Ok(managed) = ManagedServerRequest::try_from(&request) {
+                if let Err(err) = sideband_outputs.emit_request(&managed) {
+                    client
+                        .reject_server_request(
+                            request.id().clone(),
+                            JSONRPCErrorError {
+                                code: -32000,
+                                message: format!(
+                                    "turn-start bridge failed to emit sideband event for `{}`: {err}",
+                                    managed.kind()
+                                ),
+                                data: None,
+                            },
+                        )
+                        .await
+                        .context("reject request after sideband event write failure")?;
+                    return Err(err).context("write sideband server-request event");
+                }
+
+                if sideband_response_available {
+                    pending_server_requests.insert(managed.request_id().clone(), managed);
+                    Ok(None)
+                } else {
+                    client
+                        .reject_server_request(
+                            request.id().clone(),
+                            JSONRPCErrorError {
+                                code: -32601,
+                                message: format!(
+                                    "turn-start bridge received interactive server request `{}` but no sideband response fd is configured",
+                                    server_request_method_name(&request)
+                                ),
+                                data: None,
+                            },
+                        )
+                        .await
+                        .context("reject supported request without sideband response lane")?;
+                    Err(anyhow::anyhow!(
+                        "turn-start bridge received interactive server request `{}` but no sideband response fd is configured",
+                        server_request_method_name(&request)
+                    ))
+                }
+            } else {
+                client
+                    .reject_server_request(
+                        request.id().clone(),
+                        unsupported_server_request_error(&request),
+                    )
+                    .await
+                    .context("reject unsupported app-server request")?;
+                Err(unsupported_server_request_failure(&request))
+            }
         }
         AppServerEvent::ServerNotification(notification) => Ok(on_notification(
             session,
@@ -450,6 +645,7 @@ fn start_request_for_decision(
     session: &CodexTurnSession,
     cli: &Cli,
     approval_policy: AskForApproval,
+    approvals_reviewer: Option<ApprovalsReviewer>,
     next_request_id: &mut i64,
     pending_start_request_id: &mut Option<String>,
     pending_request: &mut Option<oneshot::Receiver<PendingRequestOutcome>>,
@@ -475,6 +671,7 @@ fn start_request_for_decision(
                             model,
                             cwd,
                             approval_policy: Some(approval_policy),
+                            approvals_reviewer,
                         },
                     )
                     .await
@@ -685,6 +882,32 @@ fn parse_approval_policy(value: &str) -> Result<AskForApproval> {
     }
 }
 
+fn parse_approvals_reviewer(value: &str) -> Result<ApprovalsReviewer> {
+    match value {
+        "user" => Ok(ApprovalsReviewer::User),
+        "guardian_subagent" | "guardian-subagent" => Ok(ApprovalsReviewer::GuardianSubagent),
+        _ => anyhow::bail!(
+            "unknown approvals reviewer: {value}. Expected one of: user, guardian_subagent"
+        ),
+    }
+}
+
+fn validate_sideband_platform_support(_cli: &Cli) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        if _cli.thread_id_fd.is_some()
+            || _cli.server_request_events_fd.is_some()
+            || _cli.server_request_responses_fd.is_some()
+            || _cli.control_events_fd.is_some()
+            || _cli.control_responses_fd.is_some()
+        {
+            anyhow::bail!("bridge sideband FDs are only supported on Unix targets");
+        }
+    }
+
+    Ok(())
+}
+
 fn is_active_turn_not_steerable(message: &str) -> bool {
     message.contains("ActiveTurnNotSteerable")
         || message.contains("cannot accept same-turn steering")
@@ -721,6 +944,40 @@ fn unsupported_server_request_failure(request: &ServerRequest) -> anyhow::Error 
     )
 }
 
+async fn apply_server_request_resolution(
+    client: &mut AppServerClient,
+    request_id: RequestId,
+    resolution: ServerRequestResolution,
+) -> Result<()> {
+    match resolution {
+        ServerRequestResolution::Resolve(response) => client
+            .resolve_server_request(request_id, response)
+            .await
+            .context("resolve app-server request"),
+        ServerRequestResolution::Reject(error) => client
+            .reject_server_request(request_id, error)
+            .await
+            .context("reject app-server request"),
+    }
+}
+
+async fn resolve_pending_requests_on_response_close(
+    client: &mut AppServerClient,
+    pending_server_requests: &mut HashMap<RequestId, ManagedServerRequest>,
+    reason: &str,
+) -> Result<()> {
+    let pending = std::mem::take(pending_server_requests);
+    for (request_id, request) in pending {
+        let resolution = request
+            .default_resolution_on_input_closed()
+            .with_context(|| format!("resolve pending request `{request_id}` after `{reason}`"))?;
+        apply_server_request_resolution(client, request_id, resolution)
+            .await
+            .with_context(|| format!("apply fallback resolution after `{reason}`"))?;
+    }
+    Ok(())
+}
+
 fn server_request_method_name(request: &ServerRequest) -> String {
     serde_json::to_value(request)
         .ok()
@@ -745,10 +1002,15 @@ mod tests {
     use super::server_request_method_name;
     use super::should_exit_bridge;
     use super::should_retry_steer_next_turn;
+    use super::sideband::ManagedServerRequest;
+    use super::sideband::ThreadResolvedPayload;
     use super::thread_session_request_from_cli;
     use super::unsupported_server_request_error;
     use super::unsupported_server_request_failure;
+    use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
+    use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -783,15 +1045,94 @@ mod tests {
             approval_policy: "on-request".to_string(),
             model: None,
             cwd: None,
+            approvals_reviewer: None,
             system_prompt: Some("stay terse".to_string()),
+            thread_id_fd: None,
+            server_request_events_fd: None,
+            server_request_responses_fd: None,
+            control_events_fd: None,
+            control_responses_fd: None,
             stdin_format: StdinFormat::Raw,
             chunk_quiescence_ms: 25,
         };
 
-        let request = thread_session_request_from_cli(&cli, AskForApproval::OnRequest, None)
+        let request = thread_session_request_from_cli(&cli, AskForApproval::OnRequest, None, None)
             .expect("request should be valid");
 
         assert_eq!(request.base_instructions, Some("stay terse".to_string()));
+    }
+
+    #[test]
+    fn thread_session_request_includes_approvals_reviewer_override() {
+        let cli = Cli {
+            config_overrides: Default::default(),
+            codex_bin: "codex".into(),
+            thread_id: None,
+            approval_policy: "on-request".to_string(),
+            model: None,
+            cwd: None,
+            approvals_reviewer: Some("guardian_subagent".to_string()),
+            system_prompt: None,
+            thread_id_fd: None,
+            server_request_events_fd: None,
+            server_request_responses_fd: None,
+            control_events_fd: None,
+            control_responses_fd: None,
+            stdin_format: StdinFormat::Raw,
+            chunk_quiescence_ms: 25,
+        };
+
+        let request = thread_session_request_from_cli(
+            &cli,
+            AskForApproval::OnRequest,
+            Some(ApprovalsReviewer::GuardianSubagent),
+            None,
+        )
+        .expect("request should be valid");
+
+        assert_eq!(
+            request.approvals_reviewer,
+            Some(ApprovalsReviewer::GuardianSubagent)
+        );
+    }
+
+    #[test]
+    fn thread_resolved_payload_uses_resumed_source() {
+        assert_eq!(
+            ThreadResolvedPayload::resumed("thread-2"),
+            ThreadResolvedPayload {
+                thread_id: "thread-2".to_string(),
+                source: "resumed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_user_input_request_is_supported_by_sideband_layer() {
+        let request = ServerRequest::ToolRequestUserInput {
+            request_id: RequestId::String("req-1".to_string()),
+            params: ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                questions: vec![ToolRequestUserInputQuestion {
+                    id: "q-1".to_string(),
+                    header: "Input".to_string(),
+                    question: "Continue?".to_string(),
+                    is_other: false,
+                    is_secret: false,
+                    options: Some(vec![ToolRequestUserInputOption {
+                        label: "Yes".to_string(),
+                        description: "Continue the tool".to_string(),
+                    }]),
+                }],
+            },
+        };
+
+        let managed =
+            ManagedServerRequest::try_from(&request).expect("tool user input should be supported");
+
+        assert_eq!(managed.kind(), "tool_user_input_request");
     }
 
     #[tokio::test]
@@ -834,7 +1175,13 @@ mod tests {
             approval_policy: "on-request".to_string(),
             model: None,
             cwd: None,
+            approvals_reviewer: None,
             system_prompt: Some("from cli".to_string()),
+            thread_id_fd: None,
+            server_request_events_fd: None,
+            server_request_responses_fd: None,
+            control_events_fd: None,
+            control_responses_fd: None,
             stdin_format: StdinFormat::Xml,
             chunk_quiescence_ms: 25,
         };
@@ -842,6 +1189,7 @@ mod tests {
         let err = thread_session_request_from_cli(
             &cli,
             AskForApproval::OnRequest,
+            None,
             Some("from xml".to_string()),
         )
         .expect_err("duplicate system prompt should fail");
@@ -970,30 +1318,18 @@ mod tests {
 
     #[test]
     fn unsupported_server_requests_are_rejected_with_clear_error() {
-        let request = ServerRequest::ToolRequestUserInput {
+        let request = ServerRequest::ChatgptAuthTokensRefresh {
             request_id: RequestId::String("req-1".to_string()),
-            params: ToolRequestUserInputParams {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "item-1".to_string(),
-                questions: vec![ToolRequestUserInputQuestion {
-                    id: "q-1".to_string(),
-                    header: "Input".to_string(),
-                    question: "Continue?".to_string(),
-                    is_other: false,
-                    is_secret: false,
-                    options: Some(vec![ToolRequestUserInputOption {
-                        label: "Yes".to_string(),
-                        description: "Continue the tool".to_string(),
-                    }]),
-                }],
+            params: ChatgptAuthTokensRefreshParams {
+                reason: ChatgptAuthTokensRefreshReason::Unauthorized,
+                previous_account_id: Some("acct-1".to_string()),
             },
         };
 
         let error = unsupported_server_request_error(&request);
 
         assert_eq!(error.code, -32601);
-        assert!(error.message.contains("tool/requestUserInput"));
+        assert!(error.message.contains("account/chatgptAuthTokens/refresh"));
         assert!(
             error
                 .message
@@ -1001,35 +1337,23 @@ mod tests {
         );
         assert_eq!(
             server_request_method_name(&request),
-            "item/tool/requestUserInput"
+            "account/chatgptAuthTokens/refresh"
         );
     }
 
     #[test]
     fn unsupported_server_requests_fail_loudly_after_rejection() {
-        let request = ServerRequest::ToolRequestUserInput {
+        let request = ServerRequest::ChatgptAuthTokensRefresh {
             request_id: RequestId::String("req-1".to_string()),
-            params: ToolRequestUserInputParams {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "item-1".to_string(),
-                questions: vec![ToolRequestUserInputQuestion {
-                    id: "q-1".to_string(),
-                    header: "Input".to_string(),
-                    question: "Continue?".to_string(),
-                    is_other: false,
-                    is_secret: false,
-                    options: Some(vec![ToolRequestUserInputOption {
-                        label: "Yes".to_string(),
-                        description: "Continue the tool".to_string(),
-                    }]),
-                }],
+            params: ChatgptAuthTokensRefreshParams {
+                reason: ChatgptAuthTokensRefreshReason::Unauthorized,
+                previous_account_id: Some("acct-1".to_string()),
             },
         };
         let error = unsupported_server_request_failure(&request);
 
         assert!(error.to_string().contains(
-            "turn-start bridge does not support interactive server request `item/tool/requestUserInput`"
+            "turn-start bridge does not support interactive server request `account/chatgptAuthTokens/refresh`"
         ));
     }
 
