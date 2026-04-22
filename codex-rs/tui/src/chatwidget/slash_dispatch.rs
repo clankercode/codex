@@ -7,6 +7,13 @@
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PermissionsCommandMode {
+    Default,
+    Guardian,
+    All,
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -53,6 +60,84 @@ impl ChatWidget {
                 /*hint*/ None,
             );
             false
+        }
+    }
+
+    fn apply_permissions_command_mode(&mut self, mode: PermissionsCommandMode) {
+        match mode {
+            PermissionsCommandMode::Default => {
+                let Some(preset) = builtin_approval_presets()
+                    .into_iter()
+                    .find(|preset| preset.id == "auto")
+                else {
+                    self.add_error_message(
+                        "Internal error: missing the 'auto' approval preset.".to_string(),
+                    );
+                    return;
+                };
+                Self::emit_permission_mode_events(
+                    &self.app_event_tx,
+                    preset.approval,
+                    preset.sandbox,
+                    preset.label.to_string(),
+                    ApprovalsReviewer::User,
+                );
+            }
+            PermissionsCommandMode::Guardian => {
+                if self.config.features.enabled(Feature::GuardianApproval) {
+                    Self::emit_permission_mode_events(
+                        &self.app_event_tx,
+                        AskForApproval::OnRequest,
+                        SandboxPolicy::new_workspace_write_policy(),
+                        "Guardian Approvals".to_string(),
+                        ApprovalsReviewer::GuardianSubagent,
+                    );
+                    return;
+                }
+
+                let mut next_features = self.config.features.get().clone();
+                next_features.set_enabled(Feature::GuardianApproval, /*enabled*/ true);
+                if let Err(err) = self.config.features.can_set(&next_features) {
+                    self.add_error_message(format!("Failed to enable Guardian Approvals: {err}"));
+                    return;
+                }
+
+                self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                    updates: vec![(Feature::GuardianApproval, true)],
+                });
+            }
+            PermissionsCommandMode::All => {
+                let Some(preset) = builtin_approval_presets()
+                    .into_iter()
+                    .find(|preset| preset.id == "full-access")
+                else {
+                    self.add_error_message(
+                        "Internal error: missing the 'full-access' approval preset.".to_string(),
+                    );
+                    return;
+                };
+
+                if self
+                    .config
+                    .notices
+                    .hide_full_access_warning
+                    .unwrap_or(false)
+                {
+                    Self::emit_permission_mode_events(
+                        &self.app_event_tx,
+                        preset.approval,
+                        preset.sandbox,
+                        preset.label.to_string(),
+                        ApprovalsReviewer::User,
+                    );
+                } else {
+                    self.app_event_tx
+                        .send(AppEvent::OpenFullAccessConfirmation {
+                            preset,
+                            return_to_permissions: false,
+                        });
+                }
+            }
         }
     }
 
@@ -514,6 +599,26 @@ impl ChatWidget {
                         self.add_error_message("Usage: /idle-time [on|off|status]".to_string());
                     }
                 }
+            }
+            SlashCommand::Approvals | SlashCommand::Permissions => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+
+                let selected_mode = match trimmed.to_ascii_lowercase().as_str() {
+                    "default" => PermissionsCommandMode::Default,
+                    "guardian" => PermissionsCommandMode::Guardian,
+                    "all" => PermissionsCommandMode::All,
+                    _ => {
+                        self.add_error_message(format!(
+                            "Usage: /{} [default|guardian|all]",
+                            cmd.command()
+                        ));
+                        return;
+                    }
+                };
+                self.apply_permissions_command_mode(selected_mode);
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
