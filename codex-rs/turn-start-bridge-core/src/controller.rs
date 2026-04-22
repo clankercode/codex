@@ -136,6 +136,15 @@ impl BridgeController {
         self.turn_state = TurnState::BusyUnknownTurn;
     }
 
+    pub fn recover_missing_active_turn(
+        &mut self,
+        message: QueuedMessage,
+        reason: ReleaseReason,
+    ) -> Option<ReleaseDecision> {
+        self.pending_steer_turn_id = None;
+        self.release_start(message, reason)
+    }
+
     pub fn pending_turn_message(&self) -> Option<&QueuedMessage> {
         self.pending_turn_message.as_ref()
     }
@@ -248,6 +257,10 @@ impl BridgeController {
             self.turn_state = TurnState::Running { turn_id };
             self.pending_turn_message = None;
             self.pending_steer_turn_id = None;
+            if let Some(release) = self.flush_steer_pending_queue_for_current_state() {
+                return Some(release);
+            }
+
             return self.release_pending_immediate();
         }
 
@@ -282,6 +295,10 @@ impl BridgeController {
         self.pending_turn_message = None;
         self.pending_turn_completed_id = None;
         self.pending_steer_turn_id = None;
+        if let Some(release) = self.flush_steer_pending_queue_for_current_state() {
+            return Some(release);
+        }
+
         self.release_pending_immediate()
     }
 
@@ -1575,6 +1592,151 @@ mod tests {
         assert_eq!(
             controller.pending_turn_message(),
             Some(&queued(QueueMode::AfterToolCall, "hello"))
+        );
+    }
+
+    #[test]
+    fn recover_missing_active_turn_releases_start_turn_for_inflight_steer_message() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Immediate,
+                "steer-me",
+            ))),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            })
+        );
+
+        let release = controller
+            .recover_missing_active_turn(
+                queued(QueueMode::Immediate, "steer-me"),
+                ReleaseReason::Immediate,
+            )
+            .expect("missing active turn should start a new turn");
+
+        assert_eq!(
+            release,
+            ReleaseDecision {
+                action: ReleaseAction::StartTurn,
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            }
+        );
+        assert_eq!(
+            controller.turn_state(),
+            &TurnState::TurnStartPending {
+                reserved_turn_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn recover_missing_active_turn_releases_buffered_immediate_after_fresh_turn_starts() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Immediate,
+                "steer-me",
+            ))),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            })
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Immediate,
+                "follow-up",
+            ))),
+            None
+        );
+
+        assert_eq!(
+            controller.recover_missing_active_turn(
+                queued(QueueMode::Immediate, "steer-me"),
+                ReleaseReason::Immediate,
+            ),
+            Some(ReleaseDecision {
+                action: ReleaseAction::StartTurn,
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            })
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::TurnStartAcceptedWithTurnId {
+                turn_id: "turn-2".to_string(),
+            }),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-2".to_string(),
+                },
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "follow-up"),
+            })
+        );
+    }
+
+    #[test]
+    fn recover_missing_active_turn_routes_buffered_default_into_fresh_turn() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Immediate,
+                "steer-me",
+            ))),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            })
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Default,
+                "buffered-default",
+            ))),
+            None
+        );
+
+        assert_eq!(
+            controller.recover_missing_active_turn(
+                queued(QueueMode::Immediate, "steer-me"),
+                ReleaseReason::Immediate,
+            ),
+            Some(ReleaseDecision {
+                action: ReleaseAction::StartTurn,
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "steer-me"),
+            })
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::TurnStartAcceptedWithTurnId {
+                turn_id: "turn-2".to_string(),
+            }),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::TerminalInteraction {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-2".to_string(),
+            }),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-2".to_string(),
+                },
+                reason: ReleaseReason::AfterToolCall,
+                message: queued(QueueMode::AfterToolCall, "buffered-default"),
+            })
         );
     }
 }
