@@ -709,6 +709,7 @@ async fn slash_resume_with_arg_requests_named_session() {
         Vec::new(),
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(chat.bottom_pane.composer_text().is_empty());
 
     assert_matches!(
         rx.try_recv(),

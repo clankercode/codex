@@ -30,6 +30,9 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         self.dispatch_command_with_args(cmd, args, text_elements);
+        self.bottom_pane.drain_pending_submission_state();
+        self.bottom_pane
+            .set_composer_text(String::new(), Vec::new(), Vec::new());
         self.bottom_pane.record_pending_slash_command_history();
     }
 
