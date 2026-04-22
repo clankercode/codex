@@ -15,9 +15,9 @@ exec *args:
     cargo run --bin codex -- exec "$@"
 
 # Install the x-client local runtime binaries from this checkout.
-x-install:
-    cargo install --path cli --locked --force --jobs 1
-    cargo install --path turn-start-bridge --locked --force --jobs 1
+x-install jobs="1":
+    cargo install --path cli --locked --force --jobs {{jobs}}
+    cargo install --path turn-start-bridge --locked --force --jobs {{jobs}}
 
 # Sync/rebase/build/install/smoke/push the x-thin branch in a maintenance worktree.
 [no-cd]
