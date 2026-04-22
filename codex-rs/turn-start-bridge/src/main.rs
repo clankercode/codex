@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 mod sideband;
 
@@ -44,11 +45,15 @@ use sideband::ServerRequestResolution;
 use sideband::SidebandOutputs;
 use sideband::SidebandResponseEvent;
 use sideband::ThreadResolvedPayload;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::timeout;
+
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -83,6 +88,9 @@ struct Cli {
 
     #[arg(long = "thread-id-fd", value_name = "FD")]
     thread_id_fd: Option<i32>,
+
+    #[arg(long = "xml-input-fd", value_name = "FD")]
+    xml_input_fd: Option<i32>,
 
     #[arg(long = "server-request-events-fd", value_name = "FD")]
     server_request_events_fd: Option<i32>,
@@ -119,6 +127,8 @@ struct XmlReadPrelude {
     parser: XmlInputParser,
 }
 
+type BoxedAsyncReader = Pin<Box<dyn AsyncRead + Send>>;
+
 #[ctor::ctor]
 fn pre_main() {
     codex_process_hardening::pre_main_hardening();
@@ -133,6 +143,7 @@ async fn main() -> Result<()> {
         .as_deref()
         .map(parse_approvals_reviewer)
         .transpose()?;
+    validate_xml_input_mode(&cli)?;
     validate_sideband_platform_support(&cli)?;
     validate_unique_sideband_fds(&cli)?;
     let sideband_outputs = SidebandOutputs::from_fds(
@@ -166,8 +177,8 @@ async fn main() -> Result<()> {
     let xml_system_prompt = match cli.stdin_format {
         StdinFormat::Raw => None,
         StdinFormat::Xml => {
-            let mut stdin = tokio::io::stdin();
-            let prelude = read_xml_prelude_from_reader(&mut stdin).await?;
+            let mut xml_reader = open_xml_input_reader(cli.xml_input_fd)?;
+            let prelude = read_xml_prelude_from_reader(&mut xml_reader).await?;
             stdin_closed = prelude.stdin_closed;
             initial_messages = prelude.pending_messages;
             if !stdin_closed {
@@ -175,7 +186,7 @@ async fn main() -> Result<()> {
                 let input_error_tx = input_error_tx.clone();
                 tokio::spawn(async move {
                     if let Err(err) =
-                        read_xml_chunks_from_reader(stdin, prelude.parser, chunk_tx).await
+                        read_xml_chunks_from_reader(xml_reader, prelude.parser, chunk_tx).await
                     {
                         let _ = input_error_tx.send(err.to_string());
                     }
@@ -770,7 +781,7 @@ where
 
 async fn read_xml_prelude_from_reader<R>(reader: &mut R) -> Result<XmlReadPrelude>
 where
-    R: AsyncReadExt + Unpin,
+    R: AsyncRead + Unpin,
 {
     let mut parser = XmlInputParser::default();
     let mut buf = [0_u8; 4096];
@@ -819,7 +830,7 @@ async fn read_xml_chunks_from_reader<R>(
     chunk_tx: mpsc::UnboundedSender<ParsedMessage>,
 ) -> Result<()>
 where
-    R: AsyncReadExt + Unpin,
+    R: AsyncRead + Unpin,
 {
     let mut buf = [0_u8; 4096];
 
@@ -871,7 +882,8 @@ fn parse_approvals_reviewer(value: &str) -> Result<ApprovalsReviewer> {
 fn validate_sideband_platform_support(_cli: &Cli) -> Result<()> {
     #[cfg(not(unix))]
     {
-        if _cli.thread_id_fd.is_some()
+        if _cli.xml_input_fd.is_some()
+            || _cli.thread_id_fd.is_some()
             || _cli.server_request_events_fd.is_some()
             || _cli.server_request_responses_fd.is_some()
             || _cli.control_events_fd.is_some()
@@ -884,9 +896,18 @@ fn validate_sideband_platform_support(_cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+fn validate_xml_input_mode(cli: &Cli) -> Result<()> {
+    if cli.xml_input_fd.is_some() && !matches!(cli.stdin_format, StdinFormat::Xml) {
+        anyhow::bail!("--xml-input-fd requires --stdin-format xml");
+    }
+
+    Ok(())
+}
+
 fn validate_unique_sideband_fds(cli: &Cli) -> Result<()> {
     let mut seen = HashMap::<i32, &str>::new();
     for (name, fd) in [
+        ("xml-input-fd", cli.xml_input_fd),
         ("thread-id-fd", cli.thread_id_fd),
         ("server-request-events-fd", cli.server_request_events_fd),
         (
@@ -906,6 +927,25 @@ fn validate_unique_sideband_fds(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn open_xml_input_reader(xml_input_fd: Option<i32>) -> Result<BoxedAsyncReader> {
+    if let Some(fd) = xml_input_fd {
+        if fd < 0 {
+            anyhow::bail!("invalid --xml-input-fd value `{fd}`");
+        }
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        return Ok(Box::pin(tokio::fs::File::from_std(file)));
+    }
+
+    Ok(Box::pin(tokio::io::stdin()))
+}
+
+#[cfg(not(unix))]
+fn open_xml_input_reader(xml_input_fd: Option<i32>) -> Result<BoxedAsyncReader> {
+    let _ = xml_input_fd;
+    Ok(Box::pin(tokio::io::stdin()))
 }
 
 fn is_active_turn_not_steerable(message: &str) -> bool {
@@ -1023,6 +1063,8 @@ mod tests {
     use super::QuiescencePolicy;
     use super::StdinFormat;
     use super::on_notification;
+    #[cfg(unix)]
+    use super::open_xml_input_reader;
     use super::read_chunks_from_reader;
     use super::read_xml_prelude_from_reader;
     use super::server_request_method_name;
@@ -1036,6 +1078,7 @@ mod tests {
     use super::unsupported_server_request_error;
     use super::unsupported_server_request_failure;
     use super::validate_unique_sideband_fds;
+    use super::validate_xml_input_mode;
     use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -1063,6 +1106,10 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    #[cfg(unix)]
+    use std::os::fd::IntoRawFd;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
 
@@ -1078,6 +1125,7 @@ mod tests {
             approvals_reviewer: None,
             system_prompt: Some("stay terse".to_string()),
             thread_id_fd: None,
+            xml_input_fd: None,
             server_request_events_fd: None,
             server_request_responses_fd: None,
             control_events_fd: None,
@@ -1104,6 +1152,7 @@ mod tests {
             approvals_reviewer: Some("guardian_subagent".to_string()),
             system_prompt: None,
             thread_id_fd: None,
+            xml_input_fd: None,
             server_request_events_fd: None,
             server_request_responses_fd: None,
             control_events_fd: None,
@@ -1138,6 +1187,7 @@ mod tests {
             approvals_reviewer: None,
             system_prompt: None,
             thread_id_fd: None,
+            xml_input_fd: None,
             server_request_events_fd: None,
             server_request_responses_fd: None,
             control_events_fd: Some(9),
@@ -1264,6 +1314,63 @@ mod tests {
         assert_eq!(prelude.stdin_closed, false);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn xml_prelude_can_read_from_explicit_xml_input_fd() {
+        use std::io::Write;
+
+        let (read_end, mut write_end) = UnixStream::pair().expect("socket pair should open");
+        write_end
+            .write_all(b"<message type=\"user\">fd payload</message>")
+            .expect("pipe write should succeed");
+        drop(write_end);
+
+        let mut reader =
+            open_xml_input_reader(Some(read_end.into_raw_fd())).expect("xml input fd should open");
+        let prelude = read_xml_prelude_from_reader(&mut reader)
+            .await
+            .expect("prelude should parse");
+
+        assert_eq!(prelude.system_prompt, None);
+        assert_eq!(
+            prelude.pending_messages,
+            vec![codex_turn_start_bridge_core::ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "fd payload".to_string(),
+            }]
+        );
+        assert_eq!(prelude.stdin_closed, false);
+    }
+
+    #[test]
+    fn xml_input_fd_requires_xml_mode() {
+        let cli = Cli {
+            config_overrides: Default::default(),
+            codex_bin: "codex".into(),
+            thread_id: None,
+            approval_policy: "on-request".to_string(),
+            model: None,
+            cwd: None,
+            approvals_reviewer: None,
+            system_prompt: None,
+            thread_id_fd: None,
+            xml_input_fd: Some(4),
+            server_request_events_fd: None,
+            server_request_responses_fd: None,
+            control_events_fd: None,
+            control_responses_fd: None,
+            stdin_format: StdinFormat::Raw,
+            chunk_quiescence_ms: 25,
+        };
+
+        let err = validate_xml_input_mode(&cli).expect_err("raw stdin mode should reject xml fd");
+
+        assert_eq!(
+            err.to_string(),
+            "--xml-input-fd requires --stdin-format xml"
+        );
+    }
+
     #[test]
     fn cli_system_prompt_conflicts_with_xml_system_prompt() {
         let cli = Cli {
@@ -1276,6 +1383,7 @@ mod tests {
             approvals_reviewer: None,
             system_prompt: Some("from cli".to_string()),
             thread_id_fd: None,
+            xml_input_fd: None,
             server_request_events_fd: None,
             server_request_responses_fd: None,
             control_events_fd: None,
