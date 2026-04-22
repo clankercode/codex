@@ -15,6 +15,7 @@ stream.
 ```bash
 --system-prompt <text>
 --stdin-format raw|xml
+--xml-input-fd <fd>
 --thread-id-fd <fd>
 --server-request-events-fd <fd>
 --server-request-responses-fd <fd>
@@ -35,6 +36,12 @@ into `turn/start` or `turn/steer`.
 
 `--stdin-format xml` changes stdin into a sequence of XML fragments. Message
 boundaries come from closing XML tags, not from quiescence timing.
+
+`--xml-input-fd` is Unix-only in v1 and applies to the standalone
+`codex-turn-start-bridge`. When set, XML-framed input is read from that
+inherited file descriptor instead of `stdin`. This requires `--stdin-format xml`
+and allows managed wrappers to keep `stdin` reserved for some other long-lived
+channel while still feeding structured XML input into the bridge.
 
 The new bridge sideband flags are Unix-only in v1:
 
