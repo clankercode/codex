@@ -363,6 +363,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         queued_user_messages,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        personality: chat.config.personality,
         task_running: false,
         agent_turn_running: false,
         idle_timing_state: IdleTimingState::default(),

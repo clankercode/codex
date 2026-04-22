@@ -328,6 +328,7 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::StructuredInputPreviewEntry;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -886,6 +887,7 @@ pub(crate) struct ChatWidget {
     suppress_initial_user_message_submit: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    structured_input_preview: Vec<StructuredInputPreviewEntry>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1076,9 +1078,23 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
+    personality: Option<Personality>,
     idle_timing_state: IdleTimingState,
     task_running: bool,
     agent_turn_running: bool,
+}
+
+impl ThreadInputState {
+    pub(crate) fn submission_collaboration_mode(&self) -> Option<CollaborationMode> {
+        self.active_collaboration_mask.as_ref().map_or_else(
+            || None,
+            |mask| Some(self.current_collaboration_mode.apply_mask(mask)),
+        )
+    }
+
+    pub(crate) fn personality(&self) -> Option<Personality> {
+        self.personality
+    }
 }
 
 impl From<String> for UserMessage {
@@ -3358,6 +3374,7 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            personality: self.config.personality,
             idle_timing_state: self.idle_timing_state.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
@@ -3369,6 +3386,7 @@ impl ChatWidget {
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.config.personality = input_state.personality;
             self.idle_timing_state = input_state.idle_timing_state;
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
@@ -5026,6 +5044,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            structured_input_preview: Vec::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -7313,7 +7332,16 @@ impl ChatWidget {
             queued_messages,
             pending_steers,
             rejected_steers,
+            self.structured_input_preview.clone(),
         );
+    }
+
+    pub(crate) fn set_structured_input_preview(
+        &mut self,
+        structured_input_preview: Vec<StructuredInputPreviewEntry>,
+    ) {
+        self.structured_input_preview = structured_input_preview;
+        self.refresh_pending_input_preview();
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
@@ -9486,6 +9514,21 @@ impl ChatWidget {
     /// Set the personality in the widget's config copy.
     pub(crate) fn set_personality(&mut self, personality: Personality) {
         self.config.personality = Some(personality);
+    }
+
+    pub(crate) fn structured_input_turn_context(
+        &self,
+    ) -> (Option<CollaborationMode>, Option<Personality>) {
+        let collaboration_mode = self
+            .active_collaboration_mask
+            .as_ref()
+            .map(|_| self.effective_collaboration_mode());
+        let personality = self
+            .config
+            .personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
+            .filter(|_| self.current_model_supports_personality());
+        (collaboration_mode, personality)
     }
 
     /// Set Fast mode in the widget's config copy.

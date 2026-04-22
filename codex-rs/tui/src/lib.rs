@@ -153,6 +153,7 @@ mod slash_command;
 mod status;
 mod status_indicator_widget;
 mod streaming;
+mod structured_input;
 mod style;
 mod terminal_palette;
 mod terminal_title;
@@ -232,6 +233,7 @@ pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::structured_input::StructuredInputRuntime;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
@@ -1076,6 +1078,8 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
+    let mut structured_input = StructuredInputRuntime::from_xml_input_fd(cli.xml_input_fd)?;
+
     let mut app_server = Some(
         match start_app_server(
             &app_server_target,
@@ -1455,6 +1459,7 @@ async fn run_ratatui_app(
         remote_url,
         remote_auth_token,
         environment_manager,
+        structured_input.take(),
     )
     .await;
 

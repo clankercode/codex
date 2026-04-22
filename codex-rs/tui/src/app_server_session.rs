@@ -291,15 +291,24 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
-    pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
-        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
-            .await
+    pub(crate) async fn start_thread(
+        &mut self,
+        config: &Config,
+        base_instructions: Option<String>,
+    ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_session_start_source(
+            config,
+            /*session_start_source*/ None,
+            base_instructions,
+        )
+        .await
     }
 
     pub(crate) async fn start_thread_with_session_start_source(
         &mut self,
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
+        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
@@ -311,6 +320,7 @@ impl AppServerSession {
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
+                    base_instructions,
                 ),
             })
             .await
@@ -322,6 +332,7 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
+        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
@@ -333,6 +344,7 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    base_instructions,
                 ),
             })
             .await
@@ -344,6 +356,7 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
+        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
@@ -355,6 +368,7 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    base_instructions,
                 ),
             })
             .await
@@ -952,6 +966,7 @@ fn thread_start_params_from_config(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
+    base_instructions: Option<String>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -963,6 +978,7 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         session_start_source,
+        base_instructions,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
@@ -973,6 +989,7 @@ fn thread_resume_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    base_instructions: Option<String>,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id: thread_id.to_string(),
@@ -983,6 +1000,7 @@ fn thread_resume_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions,
         persist_extended_history: true,
         ..ThreadResumeParams::default()
     }
@@ -993,6 +1011,7 @@ fn thread_fork_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    base_instructions: Option<String>,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
@@ -1004,6 +1023,7 @@ fn thread_fork_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
         ephemeral: config.ephemeral,
+        base_instructions,
         persist_extended_history: true,
         ..ThreadForkParams::default()
     }
@@ -1278,6 +1298,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             /*session_start_source*/ None,
+            /*base_instructions*/ None,
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
@@ -1294,9 +1315,44 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             Some(ThreadStartSource::Clear),
+            /*base_instructions*/ None,
         );
 
         assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_params_forward_base_instructions() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let thread_id = ThreadId::new();
+        let base_instructions = Some("be terse".to_string());
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+            base_instructions.clone(),
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            base_instructions.clone(),
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            base_instructions.clone(),
+        );
+
+        assert_eq!(start.base_instructions, base_instructions);
+        assert_eq!(resume.base_instructions, base_instructions);
+        assert_eq!(fork.base_instructions, base_instructions);
     }
 
     #[tokio::test]
@@ -1310,18 +1366,21 @@ mod tests {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             /*session_start_source*/ None,
+            /*base_instructions*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*base_instructions*/ None,
         );
         let fork = thread_fork_params_from_config(
             config,
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*base_instructions*/ None,
         );
 
         assert_eq!(start.cwd, None);
@@ -1344,18 +1403,21 @@ mod tests {
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
             /*session_start_source*/ None,
+            /*base_instructions*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*base_instructions*/ None,
         );
         let fork = thread_fork_params_from_config(
             config,
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*base_instructions*/ None,
         );
 
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));

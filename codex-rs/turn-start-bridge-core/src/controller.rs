@@ -7,6 +7,15 @@ pub struct QueuedMessage {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ControllerQueueSnapshot {
+    pub pending_immediate: Vec<QueuedMessage>,
+    pub steer_pending: Vec<QueuedMessage>,
+    pub after_tool_call: Vec<QueuedMessage>,
+    pub after_any_item: Vec<QueuedMessage>,
+    pub next_turn: Vec<QueuedMessage>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnState {
     Idle,
@@ -141,6 +150,16 @@ impl BridgeController {
             self.after_any_item_queue.len(),
             self.next_turn_queue.len(),
         )
+    }
+
+    pub fn queue_snapshot(&self) -> ControllerQueueSnapshot {
+        ControllerQueueSnapshot {
+            pending_immediate: self.pending_immediate_queue.iter().cloned().collect(),
+            steer_pending: self.steer_pending_queue.iter().cloned().collect(),
+            after_tool_call: self.after_tool_call_queue.iter().cloned().collect(),
+            after_any_item: self.after_any_item_queue.iter().cloned().collect(),
+            next_turn: self.next_turn_queue.iter().cloned().collect(),
+        }
     }
 
     pub fn on_event(&mut self, event: ControllerEvent) -> Option<ReleaseDecision> {
@@ -542,12 +561,8 @@ impl BridgeController {
             return None;
         }
 
-        let Some(turn_id) = self.active_turn_id().map(str::to_string) else {
-            return None;
-        };
-        let Some(message) = self.pending_immediate_queue.pop_front() else {
-            return None;
-        };
+        let turn_id = self.active_turn_id().map(str::to_string)?;
+        let message = self.pending_immediate_queue.pop_front()?;
 
         self.pending_steer_turn_id = Some(turn_id.clone());
         Some(ReleaseDecision {

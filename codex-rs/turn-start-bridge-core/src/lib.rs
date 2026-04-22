@@ -9,6 +9,7 @@ pub use chunking::ReadSignal;
 pub use controller::BridgeController;
 pub use controller::CompletionSignal;
 pub use controller::ControllerEvent;
+pub use controller::ControllerQueueSnapshot;
 pub use controller::QueuedMessage;
 pub use controller::ReleaseAction;
 pub use controller::ReleaseDecision;

@@ -123,7 +123,7 @@ impl App {
 
     pub(super) async fn handle_app_server_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         event: AppServerEvent,
     ) {
         match event {
@@ -153,9 +153,21 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        _app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         notification: ServerNotification,
     ) {
+        let structured_input_actions = self
+            .structured_input
+            .as_mut()
+            .map(|runtime| runtime.handle_server_notification(&notification))
+            .unwrap_or_default();
+        if let Err(err) = self
+            .apply_structured_input_actions(app_server_client, structured_input_actions)
+            .await
+        {
+            tracing::warn!("failed to apply structured input actions: {err}");
+        }
+
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
                 if let Some(request) = self
@@ -223,7 +235,7 @@ impl App {
 
     async fn handle_server_request_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         request: ServerRequest,
     ) {
         if let Some(unsupported) = self

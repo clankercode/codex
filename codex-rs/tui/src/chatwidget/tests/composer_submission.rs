@@ -799,6 +799,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         queued_user_messages: VecDeque::new(),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        personality: chat.config.personality,
         task_running: true,
         agent_turn_running: true,
         idle_timing_state: IdleTimingState::default(),
