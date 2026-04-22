@@ -15,6 +15,12 @@ stream.
 ```bash
 --system-prompt <text>
 --stdin-format raw|xml
+--thread-id-fd <fd>
+--server-request-events-fd <fd>
+--server-request-responses-fd <fd>
+--control-events-fd <fd>
+--control-responses-fd <fd>
+--approvals-reviewer user|guardian_subagent
 ```
 
 `--system-prompt` passes `<text>` as the thread's system prompt override. The
@@ -29,6 +35,21 @@ into `turn/start` or `turn/steer`.
 
 `--stdin-format xml` changes stdin into a sequence of XML fragments. Message
 boundaries come from closing XML tags, not from quiescence timing.
+
+The new bridge sideband flags are Unix-only in v1:
+
+- `--thread-id-fd` writes exactly one JSON line after successful thread start
+  or resume and then the bridge keeps running normally
+- `--server-request-events-fd` emits machine-readable JSONL for supported
+  interactive server requests
+- `--server-request-responses-fd` accepts JSONL responses for those requests
+- `--control-events-fd` is a unified JSONL event lane that also includes the
+  `thread_resolved` event
+- `--control-responses-fd` is the unified JSONL response lane
+- `--server-request-responses-fd` and `--control-responses-fd` are mutually
+  exclusive
+- `--approvals-reviewer` forwards a thread/turn approvals reviewer override
+  into `thread/start`, `thread/resume`, and later `turn/start`
 
 `codex` TUI now also accepts:
 
@@ -74,6 +95,51 @@ optional startup system prompt and the first message. It then starts or resumes
 the thread with the selected base instructions, queues any initial messages, and
 continues reading XML-framed messages from stdin.
 
+## Bridge Control Sideband
+
+The turn-start bridge now has a machine-readable sideband for headless
+supervision and resume management.
+
+Thread handoff:
+
+- `--thread-id-fd` writes a single JSON line after `start_or_resume_thread(...)`
+  succeeds:
+
+```json
+{"thread_id":"<id>","source":"started"}
+```
+
+or
+
+```json
+{"thread_id":"<id>","source":"resumed"}
+```
+
+- the write happens once per process launch
+- after writing and flushing, the bridge continues running as the managed
+  session
+- a handoff write failure is a hard startup error
+
+Supported sideband-managed interactive server requests:
+
+- command execution approval
+- file change approval
+- permissions approval
+- MCP elicitation
+- tool `request_user_input`
+
+The bridge also normalizes legacy `ExecCommandApproval` and
+`ApplyPatchApproval` requests onto the same command/file request event kinds for
+sideband consumers.
+
+The sideband request events use top-level snake_case metadata plus a `raw` field
+that preserves the original protocol params in their normal wire shape. The
+response lanes accept JSONL keyed by the original JSON-RPC `request_id`.
+
+Unsupported interactive server requests, such as
+`account/chatgptAuthTokens/refresh`, are still rejected clearly and fail
+loudly.
+
 ## TUI Structured Input Runtime
 
 When `--xml-input-fd` is used:
@@ -108,6 +174,7 @@ When `--xml-input-fd` is used:
 
 ```rust
 pub base_instructions: Option<String>
+pub approvals_reviewer: Option<ApprovalsReviewer>
 ```
 
 The app-server client request builder maps this field to the existing v2
@@ -115,9 +182,21 @@ protocol fields:
 
 - `ThreadStartParams.base_instructions`
 - `ThreadResumeParams.base_instructions`
+- `ThreadStartParams.approvals_reviewer`
+- `ThreadResumeParams.approvals_reviewer`
+
+`codex_app_server_client::TurnRequest` now also includes:
+
+```rust
+pub approvals_reviewer: Option<ApprovalsReviewer>
+```
+
+and `build_turn_start_request(...)` maps that field to
+`TurnStartParams.approvals_reviewer`.
 
 No app-server protocol fields were added. The change uses existing
-`base_instructions` support in `thread/start` and `thread/resume`.
+`base_instructions` and `approvals_reviewer` support in the v2 app-server
+surface.
 
 ## Additional Relevant Changes
 
