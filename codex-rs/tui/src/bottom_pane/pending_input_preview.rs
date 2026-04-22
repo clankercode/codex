@@ -9,6 +9,13 @@ use crate::key_hint;
 use crate::render::renderable::Renderable;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
+use codex_turn_start_bridge_core::QueueMode;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StructuredInputPreviewEntry {
+    pub(crate) queue_mode: QueueMode,
+    pub(crate) text: String,
+}
 
 /// Widget that displays pending steers plus follow-up inputs held while a turn is in progress.
 ///
@@ -24,6 +31,7 @@ pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
+    pub structured_messages: Vec<StructuredInputPreviewEntry>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: key_hint::KeyBinding,
@@ -37,6 +45,7 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
+            structured_messages: Vec::new(),
             edit_binding: key_hint::alt(KeyCode::Up),
         }
     }
@@ -72,7 +81,8 @@ impl PendingInputPreview {
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
         if (self.pending_steers.is_empty()
             && self.rejected_steers.is_empty()
-            && self.queued_messages.is_empty())
+            && self.queued_messages.is_empty()
+            && self.structured_messages.is_empty())
             || width < 4
         {
             return Box::new(());
@@ -156,7 +166,37 @@ impl PendingInputPreview {
             );
         }
 
+        if !self.structured_messages.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            Self::push_section_header(&mut lines, width, "Queued structured input".into());
+
+            for message in &self.structured_messages {
+                let queue_mode = format!("[{}] ", queue_mode_label(message.queue_mode));
+                let wrapped = adaptive_wrap_lines(
+                    message
+                        .text
+                        .lines()
+                        .map(|line| Line::from(vec![queue_mode.clone().cyan(), line.dim()])),
+                    RtOptions::new(width as usize)
+                        .initial_indent(Line::from("  ↳ ".dim()))
+                        .subsequent_indent(Line::from("    ")),
+                );
+                Self::push_truncated_preview_lines(&mut lines, wrapped, Line::from("    …".dim()));
+            }
+        }
+
         Paragraph::new(lines).into()
+    }
+}
+
+fn queue_mode_label(queue_mode: QueueMode) -> &'static str {
+    match queue_mode {
+        QueueMode::Default | QueueMode::AfterToolCall => "AfterToolCall",
+        QueueMode::AfterAnyItem => "AfterAnyItem",
+        QueueMode::Immediate => "Immediate",
+        QueueMode::NextTurn => "NextTurn",
     }
 }
 
@@ -362,5 +402,19 @@ mod tests {
             "render_multiline_pending_steer_uses_single_prefix_and_truncates",
             format!("{buf:?}")
         );
+    }
+
+    #[test]
+    fn render_structured_input_message() {
+        let mut queue = PendingInputPreview::new();
+        queue.structured_messages.push(StructuredInputPreviewEntry {
+            queue_mode: QueueMode::AfterAnyItem,
+            text: "<c2c>hello</c2c>".to_string(),
+        });
+        let width = 48;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!("render_structured_input_message", format!("{buf:?}"));
     }
 }

@@ -59,6 +59,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::structured_input::StructuredInputRuntime;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -168,6 +169,7 @@ mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod structured_input_adapter;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -1045,6 +1047,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    structured_input: Option<StructuredInputRuntime>,
 }
 
 #[derive(Default)]
@@ -1734,6 +1737,7 @@ impl App {
         };
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
+        self.refresh_structured_input_preview();
         self.refresh_pending_thread_approvals().await;
     }
 
@@ -1770,6 +1774,7 @@ impl App {
             self.set_thread_active(active_id, /*active*/ false).await;
         }
         self.active_thread_rx = None;
+        self.refresh_structured_input_preview();
         self.refresh_pending_thread_approvals().await;
     }
 
@@ -3041,7 +3046,11 @@ impl App {
         }
 
         match app_server
-            .resume_thread(self.config.clone(), thread_id)
+            .resume_thread(
+                self.config.clone(),
+                thread_id,
+                /*base_instructions*/ None,
+            )
             .await
         {
             Ok(started) => {
@@ -3324,7 +3333,11 @@ impl App {
         }
 
         let (session, turns, live_attached) = match app_server
-            .resume_thread(self.config.clone(), thread_id)
+            .resume_thread(
+                self.config.clone(),
+                thread_id,
+                /*base_instructions*/ None,
+            )
             .await
         {
             Ok(started) => (started.session, started.turns, true),
@@ -3484,6 +3497,9 @@ impl App {
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
         self.drain_active_thread_events(tui).await?;
+        self.bind_structured_input_for_current_thread(app_server)
+            .await?;
+        self.refresh_structured_input_preview();
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
@@ -3520,6 +3536,7 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.refresh_structured_input_preview();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -3552,7 +3569,11 @@ impl App {
         }
         self.config = config.clone();
         match app_server
-            .start_thread_with_session_start_source(&config, session_start_source)
+            .start_thread_with_session_start_source(
+                &config,
+                session_start_source,
+                /*base_instructions*/ None,
+            )
             .await
         {
             Ok(started) => {
@@ -3596,6 +3617,9 @@ impl App {
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
+        self.bind_structured_input_for_current_thread(app_server)
+            .await?;
+        self.refresh_structured_input_preview();
         self.backfill_loaded_subagent_threads(app_server).await;
         Ok(())
     }
@@ -3831,6 +3855,7 @@ impl App {
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
         environment_manager: Arc<EnvironmentManager>,
+        mut structured_input: Option<StructuredInputRuntime>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -3908,9 +3933,19 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let startup_structured_input_actions = if let Some(runtime) = structured_input.as_mut() {
+            runtime.drain_startup().await
+        } else {
+            Vec::new()
+        };
+        let startup_base_instructions = structured_input
+            .as_ref()
+            .and_then(StructuredInputRuntime::startup_system_prompt);
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
+                let started = app_server
+                    .start_thread(&config, startup_base_instructions.clone())
+                    .await?;
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
@@ -3942,7 +3977,11 @@ impl App {
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
-                    .resume_thread(config.clone(), target_session.thread_id)
+                    .resume_thread(
+                        config.clone(),
+                        target_session.thread_id,
+                        startup_base_instructions.clone(),
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -3981,7 +4020,11 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread(
+                        config.clone(),
+                        target_session.thread_id,
+                        startup_base_instructions.clone(),
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -4062,10 +4105,19 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            structured_input,
         };
+        app.apply_structured_input_actions(&mut app_server, startup_structured_input_actions)
+            .await?;
+        if let Some(runtime) = app.structured_input.as_mut() {
+            runtime.lock_startup();
+        }
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+            app.bind_structured_input_for_current_thread(&mut app_server)
+                .await?;
+            app.refresh_structured_input_preview();
         }
         app.handle_skills_list_result(
             app_server
@@ -4168,6 +4220,23 @@ impl App {
                         }
                         AppRunControl::Continue
                     }
+                    structured_input_event = async {
+                        if let Some(runtime) = app.structured_input.as_mut() {
+                            runtime.recv().await
+                        } else {
+                            None
+                        }
+                    }, if app.structured_input.as_ref().is_some_and(StructuredInputRuntime::has_reader) => {
+                        match structured_input_event {
+                            Some(event) => {
+                                app.handle_structured_input_event(&mut app_server, event).await?;
+                            }
+                            None => {
+                                app.disable_structured_input();
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
                     event = tui_events.next() => {
                         if let Some(event) = event {
                             match app.handle_tui_event(tui, &mut app_server, event).await {
@@ -4181,7 +4250,7 @@ impl App {
                     }
                     app_server_event = app_server.next_event(), if listen_for_app_server_events => {
                         match app_server_event {
-                            Some(event) => app.handle_app_server_event(&app_server, event).await,
+                            Some(event) => app.handle_app_server_event(&mut app_server, event).await,
                             None => {
                                 listen_for_app_server_events = false;
                                 tracing::warn!("app-server event stream closed");
@@ -4356,7 +4425,11 @@ impl App {
             self.chat_widget.rollout_path().as_deref(),
         );
         match app_server
-            .resume_thread(resume_config.clone(), target_session.thread_id)
+            .resume_thread(
+                resume_config.clone(),
+                target_session.thread_id,
+                /*base_instructions*/ None,
+            )
             .await
         {
             Ok(resumed) => {
@@ -4515,7 +4588,14 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
+                    match app_server
+                        .fork_thread(
+                            self.config.clone(),
+                            thread_id,
+                            /*base_instructions*/ None,
+                        )
+                        .await
+                    {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
@@ -7884,6 +7964,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn structured_input_session_state_uses_current_thread_collaboration_and_personality() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let mut session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+        session.model = "gpt-5.2-codex".to_string();
+        session.reasoning_effort = Some(ReasoningEffortConfig::High);
+
+        app.primary_thread_id = Some(thread_id);
+        app.primary_session_configured = Some(session.clone());
+        app.chat_widget.handle_thread_session(session.clone());
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        app.chat_widget
+            .set_feature_enabled(Feature::Personality, /*enabled*/ true);
+        app.chat_widget.set_model("gpt-5.2-codex");
+        app.chat_widget
+            .set_collaboration_mask(CollaborationModeMask {
+                name: "Plan".to_string(),
+                mode: Some(ModeKind::Plan),
+                model: Some("gpt-5.2-codex".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+                developer_instructions: None,
+            });
+        app.chat_widget.set_personality(Personality::Friendly);
+
+        let (resolved_session, collaboration_mode, personality) = app
+            .structured_input_session_state(thread_id)
+            .await
+            .expect("expected structured-input session state");
+
+        assert_eq!(resolved_session, session);
+        assert_eq!(
+            collaboration_mode,
+            Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "gpt-5.2-codex".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::High),
+                    developer_instructions: None,
+                },
+            })
+        );
+        assert_eq!(personality, Some(Personality::Friendly));
+    }
+
+    #[tokio::test]
     async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -8122,7 +8248,10 @@ mod tests {
                 .await
                 .expect("embedded app server");
         let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            .start_thread(
+                app.chat_widget.config_ref(),
+                /*base_instructions*/ None,
+            )
             .await?;
         let thread_id = started.session.thread_id;
         app.thread_event_channels
@@ -8150,7 +8279,10 @@ mod tests {
                 .await
                 .expect("embedded app server");
         let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            .start_thread(
+                app.chat_widget.config_ref(),
+                /*base_instructions*/ None,
+            )
             .await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
@@ -8183,7 +8315,9 @@ mod tests {
                 .expect("embedded app server");
         let mut ephemeral_config = app.chat_widget.config_ref().clone();
         ephemeral_config.ephemeral = true;
-        let started = app_server.start_thread(&ephemeral_config).await?;
+        let started = app_server
+            .start_thread(&ephemeral_config, /*base_instructions*/ None)
+            .await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
             thread_id,
@@ -8339,7 +8473,9 @@ mod tests {
         app.config.memories.generate_memories = true;
 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-        let started = app_server.start_thread(&app.config).await?;
+        let started = app_server
+            .start_thread(&app.config, /*base_instructions*/ None)
+            .await?;
         let thread_id = started.session.thread_id;
         app.active_thread_id = Some(thread_id);
 
@@ -9787,6 +9923,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            structured_input: None,
         }
     }
 
@@ -9844,6 +9981,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                structured_input: None,
             },
             rx,
             op_rx,
@@ -11557,7 +11695,10 @@ guardian_approval = true
                 .await
                 .expect("embedded app server");
         let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            .start_thread(
+                app.chat_widget.config_ref(),
+                /*base_instructions*/ None,
+            )
             .await
             .expect("thread/start should succeed");
         let thread_id = started.session.thread_id;

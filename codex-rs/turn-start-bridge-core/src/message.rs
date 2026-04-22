@@ -1,4 +1,9 @@
 use crate::QueueMode;
+use quick_xml::Reader;
+use quick_xml::errors::Error as QuickXmlError;
+use quick_xml::errors::IllFormedError;
+use quick_xml::errors::SyntaxError;
+use quick_xml::events::Event;
 use serde::Deserialize;
 use std::fmt;
 
@@ -34,11 +39,7 @@ struct SystemPromptXml {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "message")]
-struct MessageXml {
-    #[serde(rename = "@type")]
-    message_type: String,
-    #[serde(rename = "@queue")]
-    queue: Option<String>,
+struct PlainTextMessageXml {
     #[serde(rename = "$text")]
     text: String,
 }
@@ -74,52 +75,16 @@ impl XmlInputParser {
             return Ok(None);
         }
 
-        let root_name = if self.buffer.starts_with("<system_prompt>") {
-            "system_prompt"
-        } else if self.buffer.starts_with("<message")
-            && self
-                .buffer
-                .as_bytes()
-                .get("<message".len())
-                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'>')
-        {
-            "message"
-        } else {
+        if !has_supported_root_prefix(&self.buffer) {
             return Err(XmlInputError::new(
                 "expected system_prompt or message XML fragment",
             ));
-        };
+        }
 
-        let close_tag = format!("</{root_name}>");
-        let mut offset = 0;
-        let mut in_cdata = false;
-        let close_start = loop {
-            if offset >= self.buffer.len() {
-                break None;
-            }
-
-            let rest = &self.buffer[offset..];
-            if in_cdata {
-                if rest.starts_with("]]>") {
-                    in_cdata = false;
-                    offset += "]]>".len();
-                } else {
-                    offset += 1;
-                }
-            } else if rest.starts_with("<![CDATA[") {
-                in_cdata = true;
-                offset += "<![CDATA[".len();
-            } else if rest.starts_with(&close_tag) {
-                break Some(offset);
-            } else {
-                offset += 1;
-            }
-        };
-        let Some(close_start) = close_start else {
+        let Some(fragment_end) = next_root_fragment_end(&self.buffer)? else {
             return Ok(None);
         };
-        let close_end = close_start + close_tag.len();
-        Ok(Some(self.buffer.drain(..close_end).collect()))
+        Ok(Some(self.buffer.drain(..fragment_end).collect()))
     }
 
     fn parse_fragment(&mut self, fragment: &str) -> Result<ParsedXmlInput, XmlInputError> {
@@ -136,27 +101,218 @@ impl XmlInputParser {
             return Ok(ParsedXmlInput::SystemPrompt(parsed.text));
         }
 
-        let parsed: MessageXml = quick_xml::de::from_str(fragment)
-            .map_err(|err| XmlInputError::new(format!("failed to parse message: {err}")))?;
-        if parsed.message_type != "user" {
+        let (message_type, queue, raw_inner_xml) = parse_message_fragment_metadata(fragment)?;
+        if message_type != "user" {
             return Err(XmlInputError::new(format!(
-                "unsupported message type `{}`",
-                parsed.message_type
+                "unsupported message type `{message_type}`"
             )));
         }
 
         self.seen_message = true;
-        let queue_mode = match parsed.queue {
+        let queue_mode = match queue {
             Some(queue) => QueueMode::parse(&queue)
                 .map_err(|_| XmlInputError::new(format!("unknown queue mode `{queue}`")))?,
             None => QueueMode::Default,
         };
+        let text = if contains_nested_xml_markup(raw_inner_xml) {
+            raw_inner_xml.to_string()
+        } else {
+            let parsed: PlainTextMessageXml = quick_xml::de::from_str(fragment)
+                .map_err(|err| XmlInputError::new(format!("failed to parse message: {err}")))?;
+            parsed.text
+        };
 
-        Ok(ParsedXmlInput::Message(ParsedMessage {
-            queue_mode,
-            text: parsed.text,
-        }))
+        Ok(ParsedXmlInput::Message(ParsedMessage { queue_mode, text }))
     }
+}
+
+fn next_root_fragment_end(buffer: &str) -> Result<Option<usize>, XmlInputError> {
+    let mut reader = Reader::from_str(buffer);
+    let mut root_depth = 0_u32;
+    let mut root_name: Option<Vec<u8>> = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(start)) => {
+                if root_depth == 0 {
+                    let name = start.name().as_ref().to_vec();
+                    if !matches!(name.as_slice(), b"system_prompt" | b"message") {
+                        return Err(XmlInputError::new(
+                            "expected system_prompt or message XML fragment",
+                        ));
+                    }
+                    root_name = Some(name);
+                }
+                root_depth += 1;
+            }
+            Ok(Event::Empty(empty)) => {
+                if root_depth == 0 {
+                    let name = empty.name().as_ref().to_vec();
+                    if !matches!(name.as_slice(), b"system_prompt" | b"message") {
+                        return Err(XmlInputError::new(
+                            "expected system_prompt or message XML fragment",
+                        ));
+                    }
+                    return Ok(Some(reader.buffer_position() as usize));
+                }
+            }
+            Ok(Event::End(end)) => {
+                if root_depth == 0 {
+                    return Err(XmlInputError::new("unexpected XML closing tag"));
+                }
+                root_depth -= 1;
+                if root_depth == 0 {
+                    let expected_root_name = root_name.as_deref().ok_or_else(|| {
+                        XmlInputError::new("expected system_prompt or message XML fragment")
+                    })?;
+                    if end.name().as_ref() != expected_root_name {
+                        return Err(XmlInputError::new(format!(
+                            "mismatched XML closing tag `</{}>`",
+                            String::from_utf8_lossy(end.name().as_ref())
+                        )));
+                    }
+                    return Ok(Some(reader.buffer_position() as usize));
+                }
+            }
+            Ok(Event::Eof) => return Ok(None),
+            Ok(
+                Event::Text(_)
+                | Event::CData(_)
+                | Event::Comment(_)
+                | Event::Decl(_)
+                | Event::PI(_)
+                | Event::DocType(_)
+                | Event::GeneralRef(_),
+            ) => {
+                if root_depth == 0 {
+                    return Err(XmlInputError::new(
+                        "expected system_prompt or message XML fragment",
+                    ));
+                }
+            }
+            Err(err) => {
+                if is_incomplete_root_fragment_error(
+                    &err,
+                    reader.buffer_position() as usize,
+                    buffer.len(),
+                ) {
+                    return Ok(None);
+                }
+                return Err(XmlInputError::new(format!(
+                    "failed to parse XML input: {err}"
+                )));
+            }
+        }
+    }
+}
+
+fn has_supported_root_prefix(buffer: &str) -> bool {
+    ["<system_prompt", "<message"]
+        .into_iter()
+        .any(|prefix| prefix.starts_with(buffer) || buffer.starts_with(prefix))
+}
+
+fn is_incomplete_root_fragment_error(
+    error: &QuickXmlError,
+    buffer_position: usize,
+    buffer_len: usize,
+) -> bool {
+    if buffer_position < buffer_len {
+        return false;
+    }
+
+    matches!(
+        error,
+        QuickXmlError::Syntax(
+            SyntaxError::InvalidBangMarkup
+                | SyntaxError::UnclosedPIOrXmlDecl
+                | SyntaxError::UnclosedComment
+                | SyntaxError::UnclosedDoctype
+                | SyntaxError::UnclosedCData
+                | SyntaxError::UnclosedTag
+        ) | QuickXmlError::IllFormed(
+            IllFormedError::MissingEndTag(_) | IllFormedError::UnclosedReference
+        )
+    )
+}
+
+fn parse_message_fragment_metadata(
+    fragment: &str,
+) -> Result<(String, Option<String>, &str), XmlInputError> {
+    let start_tag_end = fragment
+        .find('>')
+        .ok_or_else(|| XmlInputError::new("failed to parse message: missing start tag"))?;
+    let close_tag_start = fragment
+        .rfind("</message>")
+        .ok_or_else(|| XmlInputError::new("failed to parse message: missing closing tag"))?;
+    let raw_inner_xml = &fragment[start_tag_end + 1..close_tag_start];
+    let start_tag = &fragment[..=start_tag_end];
+
+    let mut reader = Reader::from_str(start_tag);
+    let mut message_type = None;
+    let mut queue = None;
+
+    match reader.read_event() {
+        Ok(Event::Start(start)) => {
+            for attribute in start.attributes() {
+                let attribute = attribute.map_err(|err| {
+                    XmlInputError::new(format!("failed to parse message attributes: {err}"))
+                })?;
+                let value = attribute
+                    .decode_and_unescape_value(reader.decoder())
+                    .map_err(|err| {
+                        XmlInputError::new(format!("failed to parse message attributes: {err}"))
+                    })?
+                    .into_owned();
+                match attribute.key.as_ref() {
+                    b"type" => message_type = Some(value),
+                    b"queue" => queue = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        Ok(_) => {
+            return Err(XmlInputError::new(
+                "failed to parse message: expected opening message tag",
+            ));
+        }
+        Err(err) => {
+            return Err(XmlInputError::new(format!(
+                "failed to parse message attributes: {err}"
+            )));
+        }
+    }
+
+    let message_type = message_type
+        .ok_or_else(|| XmlInputError::new("failed to parse message: missing type attribute"))?;
+    Ok((message_type, queue, raw_inner_xml))
+}
+
+fn contains_nested_xml_markup(raw_inner_xml: &str) -> bool {
+    let mut offset = 0;
+    let bytes = raw_inner_xml.as_bytes();
+    while offset < bytes.len() {
+        let rest = &raw_inner_xml[offset..];
+        if rest.starts_with("<![CDATA[") {
+            if let Some(end) = rest.find("]]>") {
+                offset += end + "]]>".len();
+                continue;
+            }
+            return false;
+        }
+        if rest.starts_with('<') && is_nested_xml_marker(rest) {
+            return true;
+        }
+        offset += 1;
+    }
+    false
+}
+
+fn is_nested_xml_marker(fragment: &str) -> bool {
+    fragment
+        .as_bytes()
+        .get(1)
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'/' || *byte == b'_')
 }
 
 impl XmlInputError {
@@ -165,6 +321,29 @@ impl XmlInputError {
             message: message.into(),
         }
     }
+}
+
+impl XmlInputParser {
+    pub fn discard_malformed_prefix(&mut self) -> bool {
+        let Some(next_root_start) = find_next_root_start(&self.buffer) else {
+            self.buffer.clear();
+            return false;
+        };
+
+        if next_root_start == 0 {
+            return false;
+        }
+
+        self.buffer.drain(..next_root_start);
+        true
+    }
+}
+
+fn find_next_root_start(buffer: &str) -> Option<usize> {
+    buffer
+        .char_indices()
+        .map(|(index, _)| index)
+        .find(|index| *index > 0 && has_supported_root_prefix(&buffer[*index..]))
 }
 
 impl fmt::Display for XmlInputError {
@@ -290,6 +469,120 @@ mod tests {
             Ok(vec![ParsedXmlInput::Message(ParsedMessage {
                 queue_mode: QueueMode::Default,
                 text: "look at </message> literally".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_preserves_nested_inner_xml_markup() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(
+            parser.push(
+                "<message type=\"user\"><c2c event=\"message\" from=\"peer\" alias=\"peer\">hello</c2c></message>"
+            ),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "<c2c event=\"message\" from=\"peer\" alias=\"peer\">hello</c2c>"
+                    .to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_preserves_nested_inner_xml_with_nested_message_nodes() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(
+            parser.push(
+                "<message type=\"user\"><outer><message>nested literal</message></outer></message>"
+            ),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "<outer><message>nested literal</message></outer>".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_waits_for_partial_root_tag_name() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(parser.push("<mess"), Ok(Vec::new()));
+        assert_eq!(
+            parser.push("age type=\"user\">hello</message>"),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "hello".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_waits_for_partial_attribute_value() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(
+            parser.push("<message type=\"user\" queue=\"After"),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            parser.push("ToolCall\">hello</message>"),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::AfterToolCall,
+                text: "hello".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_waits_for_partial_nested_inner_xml() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(
+            parser.push("<message type=\"user\"><outer><inner"),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            parser.push(">hello</inner></outer></message>"),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "<outer><inner>hello</inner></outer>".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn discard_malformed_prefix_keeps_following_valid_fragment() {
+        let mut parser = XmlInputParser::default();
+
+        let err = parser
+            .push("<message type=\"user\"><broken <message type=\"user\">ok</message>")
+            .expect_err("malformed prefix should fail");
+        assert!(err.to_string().contains("failed to parse XML input"));
+        assert!(parser.discard_malformed_prefix());
+        assert_eq!(
+            parser.push(""),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "ok".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn discard_malformed_prefix_keeps_partial_following_valid_fragment() {
+        let mut parser = XmlInputParser {
+            buffer: "<message type=\"user\"><broken <mess".to_string(),
+            seen_message: false,
+        };
+
+        assert!(parser.discard_malformed_prefix());
+        assert_eq!(
+            parser.push("age type=\"user\">ok</message>"),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "ok".to_string(),
             })])
         );
     }

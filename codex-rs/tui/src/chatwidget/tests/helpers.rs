@@ -254,6 +254,7 @@ pub(super) async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        structured_input_preview: Vec::new(),
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,

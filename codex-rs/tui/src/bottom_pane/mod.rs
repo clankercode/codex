@@ -129,6 +129,7 @@ mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use selection_tabs::SelectionTab;
+pub(crate) use pending_input_preview::StructuredInputPreviewEntry;
 
 /// How long the "press again to quit" hint stays visible.
 ///
@@ -897,10 +898,12 @@ impl BottomPane {
         queued: Vec<String>,
         pending_steers: Vec<String>,
         rejected_steers: Vec<String>,
+        structured_messages: Vec<StructuredInputPreviewEntry>,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.rejected_steers = rejected_steers;
         self.pending_input_preview.queued_messages = queued;
+        self.pending_input_preview.structured_messages = structured_messages;
         self.request_redraw();
     }
 
@@ -1252,7 +1255,8 @@ impl BottomPane {
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
             let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty()
-                || !self.pending_input_preview.rejected_steers.is_empty();
+                || !self.pending_input_preview.rejected_steers.is_empty()
+                || !self.pending_input_preview.structured_messages.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
@@ -1858,6 +1862,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
 
         let width = 48;
@@ -1887,6 +1892,7 @@ mod tests {
         pane.set_task_running(/*running*/ true);
         pane.set_pending_input_preview(
             vec!["Queued follow-up question".to_string()],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -1919,6 +1925,7 @@ mod tests {
         pane.set_task_running(/*running*/ true);
         pane.set_pending_input_preview(
             vec!["Queued follow-up question".to_string()],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );

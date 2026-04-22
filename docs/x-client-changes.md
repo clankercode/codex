@@ -4,6 +4,10 @@ This branch extends the turn-start bridge so callers can provide thread-scoped
 base instructions and can opt into explicitly framed XML stdin input. Raw stdin
 remains the default behavior.
 
+It also adds a TUI-only sideband XML input path so an external harness can feed
+structured user messages without multiplexing over the terminal keyboard stdin
+stream.
+
 ## User-Facing Behavior
 
 `codex-turn-start-bridge` now accepts:
@@ -25,6 +29,16 @@ into `turn/start` or `turn/steer`.
 
 `--stdin-format xml` changes stdin into a sequence of XML fragments. Message
 boundaries come from closing XML tags, not from quiescence timing.
+
+`codex` TUI now also accepts:
+
+```bash
+--xml-input-fd <fd>
+```
+
+This is Unix-only in v1. The fullscreen TUI continues to read human keyboard
+input from its normal terminal stdin path; the inherited file descriptor named
+by `--xml-input-fd` is read as a sideband stream of XML fragments.
 
 ## XML Stdin Format
 
@@ -50,12 +64,43 @@ Rules:
 - Missing `queue` means `Default`.
 - XML entity decoding is supported.
 - CDATA is supported, including text that looks like `</message>`.
+- Nested inner XML inside `<message type="user">...</message>` is preserved
+  literally as the message text instead of being rejected. This allows payloads
+  like `<c2c ...>...</c2c>` to ride inside the user message body.
 - EOF with a partial XML fragment is an error.
 
 The bridge reads enough XML before app-server thread acquisition to capture the
 optional startup system prompt and the first message. It then starts or resumes
 the thread with the selected base instructions, queues any initial messages, and
 continues reading XML-framed messages from stdin.
+
+## TUI Structured Input Runtime
+
+When `--xml-input-fd` is used:
+
+- the XML reader starts before onboarding, resume/fork selection, and initial
+  thread acquisition
+- an early `<system_prompt>` is forwarded through the existing
+  `base_instructions` field on `thread/start`, `thread/resume`, or `thread/fork`
+- sideband messages arriving before the first visible thread exists are buffered
+  and then bound to that first thread
+- once a message is bound to a thread, later thread switches do not retarget it
+- queued sideband messages reuse `BridgeController` queue semantics, driven by
+  the same `turn/started`, `turn/completed`, `terminalInteraction`, and
+  `item/completed` notifications used by the bridge
+- queued sideband messages are shown in the TUI pending-input preview as a
+  separate "Queued structured input" section
+- startup-side notices such as early parse errors, rejected late
+  `<system_prompt>` fragments, and XML-sideband EOF are replayed into TUI
+  history once the chat widget exists
+- recoverable parser errors do not disable the sideband reader; the reader
+  skips the malformed prefix, surfaces the error, and continues parsing any
+  later valid fragments that arrived in the same read buffer
+- UTF-8/read failures and EOF disable only the structured-input sideband; they
+  do not close the TUI session itself
+- released sideband turns inherit the target thread's intended TUI
+  collaboration mode and personality context instead of always falling back to
+  default turn settings
 
 ## App-Server Client Changes
 

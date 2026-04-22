@@ -69,6 +69,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Read sideband XML-framed structured input from an inherited file descriptor.
+    #[arg(long = "xml-input-fd", value_name = "FD")]
+    pub xml_input_fd: Option<i32>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
