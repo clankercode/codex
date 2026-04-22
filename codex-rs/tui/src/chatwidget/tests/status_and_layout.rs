@@ -1049,6 +1049,40 @@ async fn default_status_line_items_include_idle_time() {
 }
 
 #[tokio::test]
+async fn completed_turn_keeps_timing_row_live_in_active_viewport() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.idle_timing_state_mut()
+        .record_turn_start_user_message(Instant::now() - Duration::from_secs(5));
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    let active_lines = chat
+        .active_cell_transcript_lines(/*width*/ 120)
+        .expect("expected live timing row");
+    let rendered = active_lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Idle for"));
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 200));
+            assert!(
+                !rendered.contains("Idle for"),
+                "turn timing row should remain live instead of committing immediately"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);

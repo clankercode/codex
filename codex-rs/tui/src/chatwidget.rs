@@ -2521,7 +2521,9 @@ impl ChatWidget {
                 let (row, handle) =
                     history_cell::new_turn_timing_row(completed_at, duration, Instant::now());
                 self.turn_timing_idle_handle = Some(handle);
-                self.add_to_history(row);
+                self.flush_active_cell();
+                self.active_cell = Some(Box::new(row));
+                self.bump_active_cell_revision();
                 self.schedule_turn_timing_row_refresh();
             }
             self.request_status_line_branch_refresh();
