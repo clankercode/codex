@@ -2914,6 +2914,13 @@ impl HistoryCell for TurnTimingRow {
         );
         vec![vec!["• ".dim(), label.dim()].into()]
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        self.idle_stopped_after_secs
+            .load(Ordering::Relaxed)
+            .eq(&TURN_TIMING_IDLE_ACTIVE)
+            .then(|| self.idle_secs())
+    }
 }
 
 pub(crate) fn new_turn_timing_row(

@@ -237,7 +237,7 @@ fn format_idle_resume_note(idle: Duration) -> Option<String> {
         parts.push(format!("{minutes}m"));
     }
     parts.push(format!("{seconds}s"));
-    Some(format!("[Agent finish @ HH:MM | Δt {}]", parts.join(" ")))
+    Some(format!("[After {}]", parts.join(" ")))
 }
 
 #[cfg(test)]
@@ -296,10 +296,7 @@ mod tests {
             ]
             .join("\n")
         );
-        assert_eq!(
-            submission.resume_note,
-            Some("[Agent finish @ HH:MM | Δt 14s]".to_string())
-        );
+        assert_eq!(submission.resume_note, Some("[After 14s]".to_string()));
     }
 
     #[test]
