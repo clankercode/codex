@@ -193,3 +193,4 @@ see codex log for annotated example output
 - [] running `/effort <level>` works but does not clear the chat input.
   - it should clear the input though, like thse do: /model, /fast, /stop, and like most of them if not all. 
   - ensure you figure out how other commands do it first then follow repo-best-practices.
+- [ ] add support for a stop hook to run a command, produce output, and feed that back in as user msg. Note: need to plan this out with Max + also research claude code stop hook and other implementations from other coding clis.

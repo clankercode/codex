@@ -290,8 +290,7 @@ fn parse_message_fragment_metadata(
 
 fn contains_nested_xml_markup(raw_inner_xml: &str) -> bool {
     let mut offset = 0;
-    let bytes = raw_inner_xml.as_bytes();
-    while offset < bytes.len() {
+    while offset < raw_inner_xml.len() {
         let rest = &raw_inner_xml[offset..];
         if rest.starts_with("<![CDATA[") {
             if let Some(end) = rest.find("]]>") {
@@ -303,7 +302,10 @@ fn contains_nested_xml_markup(raw_inner_xml: &str) -> bool {
         if rest.starts_with('<') && is_nested_xml_marker(rest) {
             return true;
         }
-        offset += 1;
+        let Some(character) = rest.chars().next() else {
+            break;
+        };
+        offset += character.len_utf8();
     }
     false
 }
@@ -500,6 +502,19 @@ mod tests {
             Ok(vec![ParsedXmlInput::Message(ParsedMessage {
                 queue_mode: QueueMode::Default,
                 text: "<outer><message>nested literal</message></outer>".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn xml_parser_accepts_non_ascii_plain_text_message() {
+        let mut parser = XmlInputParser::default();
+
+        assert_eq!(
+            parser.push("<message type=\"user\">café</message>"),
+            Ok(vec![ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "café".to_string(),
             })])
         );
     }

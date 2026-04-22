@@ -10,6 +10,7 @@ use codex_turn_start_bridge_core::ParsedMessage;
 use codex_turn_start_bridge_core::ParsedXmlInput;
 use codex_turn_start_bridge_core::QueuedMessage;
 use codex_turn_start_bridge_core::ReleaseDecision;
+use codex_turn_start_bridge_core::ReleaseReason;
 use tokio::sync::mpsc;
 
 use crate::bottom_pane::StructuredInputPreviewEntry;
@@ -23,6 +24,7 @@ mod unix;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum StructuredInputReaderEvent {
     Parsed(ParsedXmlInput),
+    StartupDrainComplete,
     ParseError(String),
     Eof,
     ReadError(String),
@@ -84,10 +86,32 @@ impl StructuredInputRuntime {
     }
 
     pub(crate) async fn drain_startup(&mut self) -> Vec<StructuredInputAction> {
-        tokio::task::yield_now().await;
         let mut actions = Vec::new();
-        while let Ok(event) = self.receiver.try_recv() {
+        while let Some(event) = self.receiver.recv().await {
+            let startup_drain_complete =
+                matches!(event, StructuredInputReaderEvent::StartupDrainComplete);
+            let reader_done = matches!(
+                event,
+                StructuredInputReaderEvent::Eof | StructuredInputReaderEvent::ReadError(_)
+            );
             actions.extend(self.handle_reader_event(event, /*current_thread_id*/ None));
+
+            while let Ok(event) = self.receiver.try_recv() {
+                let startup_drain_complete =
+                    matches!(event, StructuredInputReaderEvent::StartupDrainComplete);
+                let reader_done = matches!(
+                    event,
+                    StructuredInputReaderEvent::Eof | StructuredInputReaderEvent::ReadError(_)
+                );
+                actions.extend(self.handle_reader_event(event, /*current_thread_id*/ None));
+                if startup_drain_complete || reader_done {
+                    return actions;
+                }
+            }
+
+            if startup_drain_complete || reader_done {
+                return actions;
+            }
         }
         actions
     }
@@ -148,6 +172,7 @@ impl StructuredInputRuntime {
             StructuredInputReaderEvent::ParseError(message) => {
                 vec![StructuredInputAction::Error(message)]
             }
+            StructuredInputReaderEvent::StartupDrainComplete => Vec::new(),
             StructuredInputReaderEvent::ReadError(message) => {
                 self.reader_active = false;
                 vec![StructuredInputAction::Error(message)]
@@ -185,6 +210,31 @@ impl StructuredInputRuntime {
             return Vec::new();
         };
         let decision = controller.on_event(event);
+        let mut actions = vec![StructuredInputAction::RefreshPreview];
+        if let Some(message) = controller.take_validation_error() {
+            actions.push(StructuredInputAction::Error(format!(
+                "Structured input controller validation error for thread {thread_id}: {message}"
+            )));
+        }
+        if let Some(decision) = decision {
+            actions.push(StructuredInputAction::Release {
+                thread_id,
+                decision,
+            });
+        }
+        actions
+    }
+
+    pub(crate) fn recover_missing_active_turn(
+        &mut self,
+        thread_id: ThreadId,
+        message: QueuedMessage,
+        reason: ReleaseReason,
+    ) -> Vec<StructuredInputAction> {
+        let Some(controller) = self.controllers.get_mut(&thread_id) else {
+            return Vec::new();
+        };
+        let decision = controller.recover_missing_active_turn(message, reason);
         let mut actions = vec![StructuredInputAction::RefreshPreview];
         if let Some(message) = controller.take_validation_error() {
             actions.push(StructuredInputAction::Error(format!(
@@ -352,6 +402,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+    use tokio::time::Duration;
+    use tokio::time::sleep;
 
     fn runtime() -> (
         StructuredInputRuntime,
@@ -385,6 +437,8 @@ mod tests {
             },
         )))
         .unwrap();
+        tx.send(StructuredInputReaderEvent::StartupDrainComplete)
+            .unwrap();
 
         let actions = runtime.drain_startup().await;
 
@@ -400,6 +454,42 @@ mod tests {
                 text: "hello".to_string(),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn drain_startup_waits_for_initial_reader_drain_completion() {
+        let (mut runtime, tx) = runtime();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(5)).await;
+            tx.send(StructuredInputReaderEvent::Parsed(
+                ParsedXmlInput::SystemPrompt("be terse".to_string()),
+            ))
+            .unwrap();
+            tx.send(StructuredInputReaderEvent::StartupDrainComplete)
+                .unwrap();
+        });
+
+        let actions = runtime.drain_startup().await;
+
+        assert_eq!(actions, Vec::<StructuredInputAction>::new());
+        assert_eq!(
+            runtime.startup_system_prompt(),
+            Some("be terse".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_startup_returns_after_initial_reader_drain_without_events() {
+        let (mut runtime, tx) = runtime();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(5)).await;
+            tx.send(StructuredInputReaderEvent::StartupDrainComplete)
+                .unwrap();
+        });
+
+        let actions = runtime.drain_startup().await;
+
+        assert_eq!(actions, Vec::<StructuredInputAction>::new());
     }
 
     #[test]
