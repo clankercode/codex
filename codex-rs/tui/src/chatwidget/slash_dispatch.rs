@@ -75,13 +75,63 @@ impl ChatWidget {
                     );
                     return;
                 };
-                Self::emit_permission_mode_events(
-                    &self.app_event_tx,
-                    preset.approval,
-                    preset.sandbox,
-                    preset.label.to_string(),
-                    ApprovalsReviewer::User,
-                );
+                #[cfg(target_os = "windows")]
+                {
+                    let label = if WindowsSandboxLevel::from_config(&self.config)
+                        == WindowsSandboxLevel::RestrictedToken
+                    {
+                        "Default (non-admin sandbox)".to_string()
+                    } else {
+                        preset.label.to_string()
+                    };
+
+                    if WindowsSandboxLevel::from_config(&self.config)
+                        == WindowsSandboxLevel::Disabled
+                    {
+                        if crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+                                self.config.codex_home.as_path(),
+                            )
+                        {
+                            self.app_event_tx
+                                .send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset,
+                                    mode: WindowsSandboxEnableMode::Elevated,
+                                });
+                        } else {
+                            self.app_event_tx
+                                .send(AppEvent::OpenWindowsSandboxEnablePrompt { preset });
+                        }
+                    } else if let Some((sample_paths, extra_count, failed_scan)) =
+                        self.world_writable_warning_details()
+                    {
+                        self.app_event_tx
+                            .send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                preset: Some(preset),
+                                sample_paths,
+                                extra_count,
+                                failed_scan,
+                            });
+                    } else {
+                        Self::emit_permission_mode_events(
+                            &self.app_event_tx,
+                            preset.approval,
+                            preset.sandbox,
+                            label,
+                            ApprovalsReviewer::User,
+                        );
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Self::emit_permission_mode_events(
+                        &self.app_event_tx,
+                        preset.approval,
+                        preset.sandbox,
+                        preset.label.to_string(),
+                        ApprovalsReviewer::User,
+                    );
+                }
             }
             PermissionsCommandMode::Guardian => {
                 if self.config.features.enabled(Feature::GuardianApproval) {
@@ -134,7 +184,7 @@ impl ChatWidget {
                     self.app_event_tx
                         .send(AppEvent::OpenFullAccessConfirmation {
                             preset,
-                            return_to_permissions: false,
+                            return_to_permissions: !cfg!(target_os = "windows"),
                         });
                 }
             }
