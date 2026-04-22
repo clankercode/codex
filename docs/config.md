@@ -56,6 +56,17 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Hooks
+
+Codex also supports Claude-style lifecycle hooks via `hooks.json`. Hooks are
+loaded from the active config layers, including project-scoped
+`.codex/hooks.json`, so repositories can carry their own hook configuration.
+
+Stop hooks already support structured continuation behavior: a hook can emit a
+`block` decision with a `reason`, and Codex will record that as the next
+synthetic user prompt for the thread. Hook `systemMessage` output is also
+surfaced in the UI/event stream.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

@@ -1264,6 +1264,137 @@ async fn effort_command_is_available_while_task_running() {
 }
 
 #[tokio::test]
+async fn permissions_default_command_is_available_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/permissions default");
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite { .. }),
+                ..
+            })
+        )),
+        "expected live default permissions override; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
+        )),
+        "expected permissions reviewer update; events: {events:?}"
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/permissions default"
+    );
+}
+
+#[tokio::test]
+async fn approvals_default_alias_matches_permissions_command() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/approvals default");
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite { .. }),
+                ..
+            })
+        )),
+        "expected live default permissions override; events: {events:?}"
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/approvals default"
+    );
+}
+
+#[tokio::test]
+async fn permissions_guardian_command_enables_feature_when_needed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+
+    submit_composer_text(&mut chat, "/permissions guardian");
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateFeatureFlags { updates }
+                if updates == &vec![(Feature::GuardianApproval, true)]
+        )),
+        "expected guardian feature enable event; events: {events:?}"
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/permissions guardian"
+    );
+}
+
+#[tokio::test]
+async fn permissions_all_command_opens_full_access_confirmation_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.config.notices.hide_full_access_warning = None;
+
+    submit_composer_text(&mut chat, "/permissions all");
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions: false,
+            } if preset.id == "full-access"
+        )),
+        "expected full access confirmation prompt; events: {events:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/permissions all");
+}
+
+#[tokio::test]
+async fn permissions_usage_error_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/permissions maybe");
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /permissions [default|guardian|all]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/permissions maybe"
+    );
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -138,6 +138,8 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Effort
+                | SlashCommand::Approvals
+                | SlashCommand::Permissions
                 | SlashCommand::Fast
                 | SlashCommand::IdleTime
                 | SlashCommand::Resume
@@ -157,7 +159,6 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Fast
             | SlashCommand::Personality
-            | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
@@ -185,6 +186,7 @@ impl SlashCommand {
             | SlashCommand::Exit
             | SlashCommand::IdleTime => true,
             SlashCommand::Effort => true,
+            SlashCommand::Approvals => true,
             SlashCommand::Permissions => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
