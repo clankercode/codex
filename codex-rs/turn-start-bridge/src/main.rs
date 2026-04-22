@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
         .map(parse_approvals_reviewer)
         .transpose()?;
     validate_sideband_platform_support(&cli)?;
+    validate_unique_sideband_fds(&cli)?;
     let sideband_outputs = SidebandOutputs::from_fds(
         cli.thread_id_fd,
         cli.server_request_events_fd,
@@ -353,37 +354,12 @@ async fn main() -> Result<()> {
             } => {
                 match sideband_event {
                     Some(SidebandResponseEvent::Response(response)) => {
-                        let Some(request) = pending_server_requests.remove(&response.request_id) else {
-                            eprintln!("turn-start bridge ignoring sideband response for unknown request id `{}`", response.request_id);
-                            continue;
-                        };
-                        match request.parse_response(response) {
-                            Ok(resolution) => {
-                                apply_server_request_resolution(
-                                    &mut client,
-                                    request.request_id().clone(),
-                                    resolution,
-                                )
+                        if let Some((request_id, resolution)) =
+                            take_valid_sideband_response(&mut pending_server_requests, response)?
+                        {
+                            apply_server_request_resolution(&mut client, request_id, resolution)
                                 .await
                                 .context("apply sideband server-request resolution")?;
-                            }
-                            Err(err) => {
-                                let request_id = request.request_id().clone();
-                                client
-                                    .reject_server_request(
-                                        request_id,
-                                        JSONRPCErrorError {
-                                            code: -32602,
-                                            message: format!(
-                                                "turn-start bridge received an invalid sideband response: {err}"
-                                            ),
-                                            data: None,
-                                        },
-                                    )
-                                    .await
-                                    .context("reject invalid sideband response")?;
-                                return Err(err).context("invalid sideband response");
-                            }
                         }
                     }
                     Some(SidebandResponseEvent::ParseError(message)) => {
@@ -908,6 +884,30 @@ fn validate_sideband_platform_support(_cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+fn validate_unique_sideband_fds(cli: &Cli) -> Result<()> {
+    let mut seen = HashMap::<i32, &str>::new();
+    for (name, fd) in [
+        ("thread-id-fd", cli.thread_id_fd),
+        ("server-request-events-fd", cli.server_request_events_fd),
+        (
+            "server-request-responses-fd",
+            cli.server_request_responses_fd,
+        ),
+        ("control-events-fd", cli.control_events_fd),
+        ("control-responses-fd", cli.control_responses_fd),
+    ] {
+        if let Some(fd) = fd
+            && let Some(previous) = seen.insert(fd, name)
+        {
+            anyhow::bail!(
+                "fd `{fd}` is configured for both `--{previous}` and `--{name}`; use distinct sideband file descriptors"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn is_active_turn_not_steerable(message: &str) -> bool {
     message.contains("ActiveTurnNotSteerable")
         || message.contains("cannot accept same-turn steering")
@@ -961,6 +961,32 @@ async fn apply_server_request_resolution(
     }
 }
 
+fn take_valid_sideband_response(
+    pending_server_requests: &mut HashMap<RequestId, ManagedServerRequest>,
+    response: sideband::SidebandResponseEnvelope,
+) -> Result<Option<(RequestId, ServerRequestResolution)>> {
+    let request_id = response.request_id.clone();
+    let Some(request) = pending_server_requests.get(&request_id) else {
+        eprintln!(
+            "turn-start bridge ignoring sideband response for unknown request id `{request_id}`"
+        );
+        return Ok(None);
+    };
+
+    match request.parse_response(response) {
+        Ok(resolution) => {
+            pending_server_requests.remove(&request_id);
+            Ok(Some((request_id, resolution)))
+        }
+        Err(err) => {
+            eprintln!(
+                "turn-start bridge ignoring invalid sideband response for request id `{request_id}`: {err}"
+            );
+            Ok(None)
+        }
+    }
+}
+
 async fn resolve_pending_requests_on_response_close(
     client: &mut AppServerClient,
     pending_server_requests: &mut HashMap<RequestId, ManagedServerRequest>,
@@ -1003,10 +1029,13 @@ mod tests {
     use super::should_exit_bridge;
     use super::should_retry_steer_next_turn;
     use super::sideband::ManagedServerRequest;
+    use super::sideband::SidebandResponseEnvelope;
     use super::sideband::ThreadResolvedPayload;
+    use super::take_valid_sideband_response;
     use super::thread_session_request_from_cli;
     use super::unsupported_server_request_error;
     use super::unsupported_server_request_failure;
+    use super::validate_unique_sideband_fds;
     use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -1033,6 +1062,7 @@ mod tests {
     use codex_turn_start_bridge_core::TurnState;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
 
@@ -1097,6 +1127,34 @@ mod tests {
     }
 
     #[test]
+    fn validate_unique_sideband_fds_rejects_reused_input_and_output_fd() {
+        let cli = Cli {
+            config_overrides: Default::default(),
+            codex_bin: "codex".into(),
+            thread_id: None,
+            approval_policy: "on-request".to_string(),
+            model: None,
+            cwd: None,
+            approvals_reviewer: None,
+            system_prompt: None,
+            thread_id_fd: None,
+            server_request_events_fd: None,
+            server_request_responses_fd: None,
+            control_events_fd: Some(9),
+            control_responses_fd: Some(9),
+            stdin_format: StdinFormat::Raw,
+            chunk_quiescence_ms: 25,
+        };
+
+        let err = validate_unique_sideband_fds(&cli).expect_err("duplicate fd should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "fd `9` is configured for both `--control-events-fd` and `--control-responses-fd`; use distinct sideband file descriptors"
+        );
+    }
+
+    #[test]
     fn thread_resolved_payload_uses_resumed_source() {
         assert_eq!(
             ThreadResolvedPayload::resumed("thread-2"),
@@ -1133,6 +1191,46 @@ mod tests {
             ManagedServerRequest::try_from(&request).expect("tool user input should be supported");
 
         assert_eq!(managed.kind(), "tool_user_input_request");
+    }
+
+    #[test]
+    fn invalid_sideband_response_is_ignored_and_request_stays_pending() {
+        let request = ServerRequest::ToolRequestUserInput {
+            request_id: RequestId::String("req-1".to_string()),
+            params: ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                questions: vec![ToolRequestUserInputQuestion {
+                    id: "q-1".to_string(),
+                    header: "Input".to_string(),
+                    question: "Continue?".to_string(),
+                    is_other: false,
+                    is_secret: false,
+                    options: Some(vec![ToolRequestUserInputOption {
+                        label: "Yes".to_string(),
+                        description: "Continue the tool".to_string(),
+                    }]),
+                }],
+            },
+        };
+        let managed =
+            ManagedServerRequest::try_from(&request).expect("tool user input should be supported");
+        let mut pending = HashMap::from([(managed.request_id().clone(), managed)]);
+
+        let outcome = take_valid_sideband_response(
+            &mut pending,
+            SidebandResponseEnvelope {
+                kind: "tool_user_input_response".to_string(),
+                request_id: RequestId::String("req-1".to_string()),
+                response: serde_json::json!({ "unexpected": true }),
+            },
+        )
+        .expect("invalid responses should be ignored");
+
+        assert!(outcome.is_none());
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains_key(&RequestId::String("req-1".to_string())));
     }
 
     #[tokio::test]

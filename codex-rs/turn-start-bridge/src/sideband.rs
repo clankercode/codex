@@ -552,11 +552,12 @@ fn validate_unique_fds(entries: &[(&str, Option<i32>)]) -> Result<()> {
     let mut seen = HashMap::<i32, &str>::new();
     for (name, fd) in entries {
         if let Some(fd) = fd
-            && let Some(previous) = seen.insert(*fd, name) {
-                anyhow::bail!(
-                    "fd `{fd}` is configured for both `--{previous}` and `--{name}`; use a single control lane instead of reusing the same fd"
-                );
-            }
+            && let Some(previous) = seen.insert(*fd, name)
+        {
+            anyhow::bail!(
+                "fd `{fd}` is configured for both `--{previous}` and `--{name}`; use a single control lane instead of reusing the same fd"
+            );
+        }
     }
     Ok(())
 }
