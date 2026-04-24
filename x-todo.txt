@@ -194,3 +194,33 @@ see codex log for annotated example output
   - it should clear the input though, like thse do: /model, /fast, /stop, and like most of them if not all. 
   - ensure you figure out how other commands do it first then follow repo-best-practices.
 - [x] stop hooks already support repo-scoped `.codex/hooks.json`, UI-visible `systemMessage` output, and synthetic user-message continuation via `decision: "block"` plus `reason`; only local docs/todo cleanup was needed here.
+- [ ] add slash command /compact-with-mini that will: change to gpt-5.4-mini or latest mini, run /compact, then change back to original model. This is useful after cache has expired to avoid expensive calls
+- [ ] add slash command to reload all MCP servers (/mcp-reload)
+
+
+
+---
+
+- [ ] AfterAnyItem does not train after tool calls, chat msgs, thinking, etc (all during the opponents turn). When agent's turn ends it can still hang. Some of it can be fixed clientside, but not all.
+
+
+SAMPLE COPIED FROM TUI (error msg happens when I send a message on my turn, but not if i queue a msg during agents turn):
+
+■ Structured input controller validation error for thread 019dafa6-caef-7e50-bfad-323af643e3ce: turn/
+started turn id `019dbe8c-6f86-7c80-9bf2-b5c887eb0c16` did not match active turn id `019dbe86-f36b-7691-
+8c58-4bc70c8d4ae5`
+
+• I’m polling the OCaml test run now. If the new regression fails the way I expect, I’ll patch
+  start_deliver_daemon to close everything except 0/1/2 and the explicitly requested XML fd before exec.
+
+• Working (12s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+
+• Queued structured input
+  ↳ [AfterAnyItem] <c2c event="message" from="coordinator1" alias="lyra-quill" source="broker"
+    reply_via="c2c_send" action_after="continue">FYI: filed #136 — codex agents don't see room-join
+    announcements. Max thinks it may be config-related. C2C_MCP_AUTO_JOIN_ROOMS plumbing *looks* right
+    …
+
+› Implement {feature}
+
+---
