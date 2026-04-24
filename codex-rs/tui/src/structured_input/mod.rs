@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseItem;
 use codex_turn_start_bridge_core::BridgeController;
 use codex_turn_start_bridge_core::CompletionSignal;
 use codex_turn_start_bridge_core::ControllerEvent;
@@ -398,8 +402,21 @@ fn controller_event_from_notification(
                 thread_id: notification.thread_id.clone(),
                 turn_id: notification.turn_id.clone(),
                 signal: classify_item_completed(&notification.item),
+                item_key: Some(notification.item.id().to_string()),
             },
         )),
+        ServerNotification::RawResponseItemCompleted(notification) => {
+            let (signal, item_key) = classify_raw_response_item_completed(&notification.item);
+            Some((
+                ThreadId::from_string(&notification.thread_id).ok()?,
+                ControllerEvent::ItemCompleted {
+                    thread_id: notification.thread_id.clone(),
+                    turn_id: notification.turn_id.clone(),
+                    signal,
+                    item_key,
+                },
+            ))
+        }
         _ => None,
     }
 }
@@ -424,6 +441,83 @@ fn classify_item_completed(item: &ThreadItem) -> CompletionSignal {
     }
 }
 
+fn classify_raw_response_item_completed(item: &ResponseItem) -> (CompletionSignal, Option<String>) {
+    let signal = if raw_response_item_releases_after_any_item(item) {
+        CompletionSignal::ReleasesAfterAnyItem
+    } else {
+        CompletionSignal::Ignore
+    };
+    (signal, raw_response_item_key(item))
+}
+
+fn raw_response_item_releases_after_any_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            role == "assistant" && content.iter().any(content_item_has_text)
+        }
+        ResponseItem::Reasoning {
+            summary, content, ..
+        } => {
+            summary.iter().any(reasoning_summary_has_text)
+                || content
+                    .as_ref()
+                    .is_some_and(|content| content.iter().any(reasoning_content_has_text))
+        }
+        ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
+fn raw_response_item_key(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Message { id, .. } => id.clone(),
+        ResponseItem::Reasoning { id, .. } => (!id.is_empty()).then(|| id.clone()),
+        ResponseItem::LocalShellCall { id, call_id, .. } => call_id.clone().or_else(|| id.clone()),
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
+        ResponseItem::ToolSearchCall { call_id, .. } => call_id.clone(),
+        ResponseItem::WebSearchCall { id, .. } => id.clone(),
+        ResponseItem::ImageGenerationCall { id, .. } => Some(id.clone()),
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.clone()),
+        ResponseItem::ToolSearchOutput { call_id, .. } => call_id.clone(),
+        ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => None,
+    }
+}
+
+fn content_item_has_text(item: &ContentItem) -> bool {
+    match item {
+        ContentItem::OutputText { text } => !text.is_empty(),
+        ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
+    }
+}
+
+fn reasoning_summary_has_text(item: &ReasoningItemReasoningSummary) -> bool {
+    match item {
+        ReasoningItemReasoningSummary::SummaryText { text } => !text.is_empty(),
+    }
+}
+
+fn reasoning_content_has_text(item: &ReasoningItemContent) -> bool {
+    match item {
+        ReasoningItemContent::ReasoningText { text } | ReasoningItemContent::Text { text } => {
+            !text.is_empty()
+        }
+    }
+}
+
 impl From<ParsedMessage> for StructuredInputPreviewEntry {
     fn from(message: ParsedMessage) -> Self {
         Self {
@@ -445,6 +539,11 @@ impl From<QueuedMessage> for StructuredInputPreviewEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::RawResponseItemCompletedNotification;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::Duration;
@@ -584,6 +683,36 @@ mod tests {
     }
 
     #[test]
+    fn bind_unbound_after_any_item_message_starts_idle_thread() {
+        let (mut runtime, _tx) = runtime();
+        let thread_id = ThreadId::new();
+        runtime.unbound_messages.push(QueuedMessage {
+            queue_mode: QueueMode::AfterAnyItem,
+            text: "hello".to_string(),
+        });
+
+        let actions = runtime.bind_unbound_messages(thread_id);
+
+        assert_eq!(
+            actions,
+            vec![
+                StructuredInputAction::RefreshPreview,
+                StructuredInputAction::Release {
+                    thread_id,
+                    decision: ReleaseDecision {
+                        action: codex_turn_start_bridge_core::ReleaseAction::StartTurn,
+                        reason: ReleaseReason::Idle,
+                        message: QueuedMessage {
+                            queue_mode: QueueMode::AfterAnyItem,
+                            text: "hello".to_string(),
+                        },
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn late_system_prompt_is_rejected() {
         let (mut runtime, _tx) = runtime();
         runtime.lock_startup();
@@ -696,5 +825,156 @@ mod tests {
             }),
             CompletionSignal::Ignore
         );
+    }
+
+    #[test]
+    fn raw_assistant_message_completion_releases_after_any_item() {
+        let thread_id = ThreadId::new();
+        let mut runtime = running_runtime_with_after_any_item(thread_id);
+
+        let actions = runtime.handle_server_notification(&raw_response_item_completed(
+            thread_id,
+            "turn-1",
+            ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "hello".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ));
+
+        assert!(has_after_any_item_release(&actions));
+    }
+
+    #[test]
+    fn raw_reasoning_completion_releases_after_any_item() {
+        let thread_id = ThreadId::new();
+        let mut runtime = running_runtime_with_after_any_item(thread_id);
+
+        let actions = runtime.handle_server_notification(&raw_response_item_completed(
+            thread_id,
+            "turn-1",
+            ResponseItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                    text: "thinking".to_string(),
+                }],
+                content: None,
+                encrypted_content: None,
+            },
+        ));
+
+        assert!(has_after_any_item_release(&actions));
+    }
+
+    #[test]
+    fn raw_tool_call_completion_releases_after_any_item() {
+        let thread_id = ThreadId::new();
+        let mut runtime = running_runtime_with_after_any_item(thread_id);
+
+        let actions = runtime.handle_server_notification(&raw_response_item_completed(
+            thread_id,
+            "turn-1",
+            ResponseItem::FunctionCall {
+                id: Some("call-item-1".to_string()),
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+        ));
+
+        assert!(has_after_any_item_release(&actions));
+    }
+
+    #[test]
+    fn raw_user_message_completion_does_not_release_after_any_item() {
+        let thread_id = ThreadId::new();
+        let mut runtime = running_runtime_with_after_any_item(thread_id);
+
+        let actions = runtime.handle_server_notification(&raw_response_item_completed(
+            thread_id,
+            "turn-1",
+            ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ));
+
+        assert!(!has_after_any_item_release(&actions));
+    }
+
+    #[test]
+    fn raw_tool_output_completion_does_not_release_after_any_item() {
+        let thread_id = ThreadId::new();
+        let mut runtime = running_runtime_with_after_any_item(thread_id);
+
+        let actions = runtime.handle_server_notification(&raw_response_item_completed(
+            thread_id,
+            "turn-1",
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("done".to_string()),
+            },
+        ));
+
+        assert!(!has_after_any_item_release(&actions));
+    }
+
+    fn running_runtime_with_after_any_item(thread_id: ThreadId) -> StructuredInputRuntime {
+        let (mut runtime, _tx) = runtime();
+        runtime
+            .controllers
+            .insert(thread_id, BridgeController::new(thread_id.to_string()));
+        runtime.handle_controller_event(
+            thread_id,
+            ControllerEvent::TurnStarted {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+            },
+        );
+        let _ = runtime.handle_reader_event(
+            StructuredInputReaderEvent::Parsed(ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::AfterAnyItem,
+                text: "queued".to_string(),
+            })),
+            Some(thread_id),
+        );
+        runtime
+    }
+
+    fn raw_response_item_completed(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item: ResponseItem,
+    ) -> ServerNotification {
+        ServerNotification::RawResponseItemCompleted(RawResponseItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item,
+        })
+    }
+
+    fn has_after_any_item_release(actions: &[StructuredInputAction]) -> bool {
+        actions.iter().any(|action| {
+            matches!(
+                action,
+                StructuredInputAction::Release {
+                    decision: ReleaseDecision {
+                        reason: ReleaseReason::AfterAnyItem,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
     }
 }

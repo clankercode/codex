@@ -597,6 +597,7 @@ fn on_notification(
                 thread_id: payload.thread_id,
                 turn_id: payload.turn_id,
                 signal,
+                item_key: Some(payload.item.id().to_string()),
             })
         }
         _ => None,
@@ -1069,6 +1070,7 @@ mod tests {
     use super::CodexTurnSession;
     use super::QuiescencePolicy;
     use super::StdinFormat;
+    use super::classify_item_completed;
     use super::on_notification;
     #[cfg(unix)]
     use super::open_xml_input_reader;
@@ -1086,7 +1088,6 @@ mod tests {
     use super::unsupported_server_request_failure;
     use super::validate_unique_sideband_fds;
     use super::validate_xml_input_mode;
-    use super::classify_item_completed;
     use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -1099,7 +1100,6 @@ mod tests {
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
-    use codex_turn_start_bridge_core::CompletionSignal;
     use codex_app_server_protocol::ToolRequestUserInputOption;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -1107,6 +1107,7 @@ mod tests {
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_turn_start_bridge_core::BridgeController;
+    use codex_turn_start_bridge_core::CompletionSignal;
     use codex_turn_start_bridge_core::ControllerEvent;
     use codex_turn_start_bridge_core::QueueMode;
     use codex_turn_start_bridge_core::QueuedMessage;

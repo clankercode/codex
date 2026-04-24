@@ -1,4 +1,5 @@
 use crate::QueueMode;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +59,7 @@ pub enum ControllerEvent {
         thread_id: String,
         turn_id: String,
         signal: CompletionSignal,
+        item_key: Option<String>,
     },
     SteerRejectedActiveTurnNotSteerable {
         message: QueuedMessage,
@@ -102,6 +104,7 @@ pub struct BridgeController {
     after_tool_call_queue: VecDeque<QueuedMessage>,
     after_any_item_queue: VecDeque<QueuedMessage>,
     next_turn_queue: VecDeque<QueuedMessage>,
+    observed_after_any_item_completion_keys: HashSet<String>,
 }
 
 impl BridgeController {
@@ -118,6 +121,7 @@ impl BridgeController {
             after_tool_call_queue: VecDeque::new(),
             after_any_item_queue: VecDeque::new(),
             next_turn_queue: VecDeque::new(),
+            observed_after_any_item_completion_keys: HashSet::new(),
         }
     }
 
@@ -201,7 +205,8 @@ impl BridgeController {
                 thread_id,
                 turn_id,
                 signal,
-            } => self.on_item_completed(thread_id, turn_id, signal),
+                item_key,
+            } => self.on_item_completed(thread_id, turn_id, signal, item_key),
             ControllerEvent::SteerRejectedActiveTurnNotSteerable { message } => {
                 self.on_steer_rejected_active_turn_not_steerable(message)
             }
@@ -262,6 +267,7 @@ impl BridgeController {
             }
 
             self.turn_state = TurnState::Running { turn_id };
+            self.observed_after_any_item_completion_keys.clear();
             self.pending_turn_message = None;
             self.pending_steer_turn_id = None;
             if let Some(release) = self.flush_steer_pending_queue_for_current_state() {
@@ -299,6 +305,7 @@ impl BridgeController {
         }
 
         self.turn_state = TurnState::Running { turn_id };
+        self.observed_after_any_item_completion_keys.clear();
         self.pending_turn_message = None;
         self.pending_turn_completed_id = None;
         self.pending_steer_turn_id = None;
@@ -357,6 +364,7 @@ impl BridgeController {
             }
             TurnState::BusyUnknownTurn => {
                 self.turn_state = TurnState::Running { turn_id };
+                self.observed_after_any_item_completion_keys.clear();
                 return self.release_pending_immediate();
             }
             TurnState::Running {
@@ -370,6 +378,7 @@ impl BridgeController {
             }
             TurnState::Idle => {
                 self.turn_state = TurnState::Running { turn_id };
+                self.observed_after_any_item_completion_keys.clear();
             }
         }
 
@@ -450,6 +459,7 @@ impl BridgeController {
 
         self.downgrade_pending_immediates_to_retry_queue();
         self.turn_state = TurnState::Idle;
+        self.observed_after_any_item_completion_keys.clear();
 
         self.release_from_turn_completed()
     }
@@ -543,10 +553,19 @@ impl BridgeController {
         thread_id: String,
         turn_id: String,
         signal: CompletionSignal,
+        item_key: Option<String>,
     ) -> Option<ReleaseDecision> {
         if signal != CompletionSignal::ReleasesAfterAnyItem
             || !self.matches_active_turn(&thread_id, &turn_id)
             || self.pending_steer_turn_id.is_some()
+        {
+            return None;
+        }
+
+        if let Some(item_key) = item_key
+            && !self
+                .observed_after_any_item_completion_keys
+                .insert(item_key)
         {
             return None;
         }
@@ -902,6 +921,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 signal: CompletionSignal::Ignore,
+                item_key: Some("item-1".to_string()),
             }),
             None
         );
@@ -911,6 +931,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("item-1".to_string()),
             }),
             Some(ReleaseDecision {
                 action: ReleaseAction::SteerTurn {
@@ -946,6 +967,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("item-1".to_string()),
             }),
             Some(ReleaseDecision {
                 reason: ReleaseReason::AfterAnyItem,
@@ -957,10 +979,143 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("item-2".to_string()),
             }),
             None
         );
         assert_eq!(controller.queued_counts(), (0, 1, 0));
+    }
+
+    #[test]
+    fn duplicate_after_any_item_completion_key_releases_once() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::AfterAnyItem,
+                "first",
+            ))),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::AfterAnyItem,
+                "second",
+            ))),
+            None
+        );
+
+        assert_eq!(
+            controller.on_event(ControllerEvent::ItemCompleted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("raw-1".to_string()),
+            }),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::AfterAnyItem,
+                message: queued(QueueMode::AfterAnyItem, "first"),
+            })
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::SteerAccepted {
+                turn_id: "turn-1".to_string(),
+            }),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::ItemCompleted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("raw-1".to_string()),
+            }),
+            None
+        );
+        assert_eq!(controller.queued_counts(), (0, 1, 0));
+    }
+
+    #[test]
+    fn distinct_after_any_item_completion_keys_release_distinct_messages() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::AfterAnyItem,
+                "first",
+            ))),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::AfterAnyItem,
+                "second",
+            ))),
+            None
+        );
+
+        assert!(matches!(
+            controller.on_event(ControllerEvent::ItemCompleted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("raw-1".to_string()),
+            }),
+            Some(ReleaseDecision {
+                reason: ReleaseReason::AfterAnyItem,
+                ..
+            })
+        ));
+        assert_eq!(
+            controller.on_event(ControllerEvent::SteerAccepted {
+                turn_id: "turn-1".to_string(),
+            }),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::ItemCompleted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: Some("raw-2".to_string()),
+            }),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::AfterAnyItem,
+                message: queued(QueueMode::AfterAnyItem, "second"),
+            })
+        );
+    }
+
+    #[test]
+    fn keyless_after_any_item_completion_still_releases() {
+        let mut controller = running_controller();
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::AfterAnyItem,
+                "any",
+            ))),
+            None
+        );
+
+        assert_eq!(
+            controller.on_event(ControllerEvent::ItemCompleted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                signal: CompletionSignal::ReleasesAfterAnyItem,
+                item_key: None,
+            }),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::AfterAnyItem,
+                message: queued(QueueMode::AfterAnyItem, "any"),
+            })
+        );
     }
 
     #[test]
