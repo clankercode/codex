@@ -4,7 +4,6 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
@@ -21,6 +20,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -359,7 +359,8 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
+        let runtime_permissions = turn_context.runtime_permissions().await;
+        if !sandbox_policy_allows_network_approval_flow(&runtime_permissions.sandbox_policy) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
@@ -368,7 +369,7 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
-        if !allows_network_approval_flow(turn_context.approval_policy.value()) {
+        if !allows_network_approval_flow(runtime_permissions.approval_policy) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
@@ -420,7 +421,8 @@ impl NetworkApprovalService {
                 }
             }
         }
-        let use_guardian = routes_approval_to_guardian(&turn_context);
+        let use_guardian = runtime_permissions.approval_policy == AskForApproval::OnRequest
+            && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent;
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(

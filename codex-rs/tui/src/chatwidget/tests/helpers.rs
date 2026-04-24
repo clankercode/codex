@@ -353,7 +353,7 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
-fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
+pub(super) fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
     let additional_speed_tiers = if supports_fast_mode {
         vec![codex_protocol::openai_models::SPEED_TIER_FAST]
     } else {

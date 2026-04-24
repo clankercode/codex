@@ -9,7 +9,6 @@ caching).
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
-use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -27,6 +26,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -117,13 +117,22 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
+        let otel_user = ToolDecisionSource::User;
+        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
+        let otel_cfg = ToolDecisionSource::Config;
+        let runtime_permissions = turn_ctx.runtime_permissions().await;
+        let use_guardian = strict_auto_review
+            || (runtime_permissions.approval_policy == AskForApproval::OnRequest
+                && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent);
 
         // 1) Approval
         let mut already_approved = false;
 
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.file_system_sandbox_policy)
+            default_exec_approval_requirement(
+                approval_policy,
+                &runtime_permissions.file_system_sandbox_policy,
+            )
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
@@ -194,10 +203,10 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.file_system_sandbox_policy,
-                turn_ctx.network_sandbox_policy,
+                &runtime_permissions.file_system_sandbox_policy,
+                runtime_permissions.network_sandbox_policy,
                 tool.sandbox_preference(),
-                turn_ctx.windows_sandbox_level,
+                runtime_permissions.windows_sandbox_level,
                 managed_network_active,
             ),
         };
@@ -206,15 +215,15 @@ impl ToolOrchestrator {
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
-            policy: &turn_ctx.sandbox_policy,
-            file_system_policy: &turn_ctx.file_system_sandbox_policy,
-            network_policy: turn_ctx.network_sandbox_policy,
+            policy: &runtime_permissions.sandbox_policy,
+            file_system_policy: &runtime_permissions.file_system_sandbox_policy,
+            network_policy: runtime_permissions.network_sandbox_policy,
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
-            windows_sandbox_level: turn_ctx.windows_sandbox_level,
+            windows_sandbox_level: runtime_permissions.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_ctx
                 .config
                 .permissions
@@ -270,7 +279,7 @@ impl ToolOrchestrator {
                             && matches!(
                                 default_exec_approval_requirement(
                                     approval_policy,
-                                    &turn_ctx.file_system_sandbox_policy
+                                    &runtime_permissions.file_system_sandbox_policy
                                 ),
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );
@@ -325,15 +334,15 @@ impl ToolOrchestrator {
 
                 let escalated_attempt = SandboxAttempt {
                     sandbox: SandboxType::None,
-                    policy: &turn_ctx.sandbox_policy,
-                    file_system_policy: &turn_ctx.file_system_sandbox_policy,
-                    network_policy: turn_ctx.network_sandbox_policy,
+                    policy: &runtime_permissions.sandbox_policy,
+                    file_system_policy: &runtime_permissions.file_system_sandbox_policy,
+                    network_policy: runtime_permissions.network_sandbox_policy,
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
                     use_legacy_landlock,
-                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
+                    windows_sandbox_level: runtime_permissions.windows_sandbox_level,
                     windows_sandbox_private_desktop: turn_ctx
                         .config
                         .permissions

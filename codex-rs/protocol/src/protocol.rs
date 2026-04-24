@@ -658,6 +658,10 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request the agent to summarize the current conversation context using a
+    /// one-shot model override.
+    CompactWithModel { model: String },
+
     /// Drop all persisted memory artifacts and memory-tracking DB rows.
     DropMemories,
 
@@ -799,6 +803,7 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
+            Self::CompactWithModel { .. } => "compact_with_model",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",

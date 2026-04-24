@@ -608,8 +608,17 @@ pub async fn undo(sess: &Arc<Session>, sub_id: String) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    compact_with_model(sess, sub_id, None).await;
+}
+
+pub async fn compact_with_model(
+    sess: &Arc<Session>,
+    sub_id: String,
+    model_override: Option<String>,
+) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    let turn_context = match turn_context.compact_model.clone() {
+    let compact_model = model_override.or_else(|| turn_context.compact_model.clone());
+    let turn_context = match compact_model {
         Some(compact_model) if compact_model != turn_context.model_info.slug => Arc::new(
             turn_context
                 .with_model(compact_model, &sess.services.models_manager)
@@ -1174,6 +1183,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::CompactWithModel { model } => {
+                    compact_with_model(&sess, sub.id.clone(), Some(model)).await;
                     false
                 }
                 Op::DropMemories => {

@@ -31,6 +31,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    CompactWithMini,
     IdleTime,
     Plan,
     Collab,
@@ -45,6 +46,7 @@ pub enum SlashCommand {
     Statusline,
     Theme,
     Mcp,
+    McpReload,
     Apps,
     Plugins,
     Logout,
@@ -77,6 +79,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::CompactWithMini => "summarize conversation using the latest mini model",
             SlashCommand::IdleTime => "toggle hidden idle timing context for new turns",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
@@ -116,6 +119,7 @@ impl SlashCommand {
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::McpReload => "reload configured MCP servers",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Logout => "log out of Codex",
@@ -155,6 +159,7 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::CompactWithMini
             // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Fast
@@ -179,6 +184,7 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::Mcp
+            | SlashCommand::McpReload
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Feedback
@@ -233,5 +239,17 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn x_thin_slash_commands_parse() {
+        assert_eq!(
+            SlashCommand::from_str("compact-with-mini"),
+            Ok(SlashCommand::CompactWithMini)
+        );
+        assert_eq!(
+            SlashCommand::from_str("mcp-reload"),
+            Ok(SlashCommand::McpReload)
+        );
     }
 }

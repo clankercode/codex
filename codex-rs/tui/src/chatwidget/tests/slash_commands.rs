@@ -43,6 +43,32 @@ fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) 
     }
 }
 
+fn set_mini_selection_test_catalog(chat: &mut ChatWidget, models: &[&str]) {
+    let models = ModelsResponse {
+        models: models
+            .iter()
+            .enumerate()
+            .map(|(idx, model)| {
+                test_model_info(model, idx as i32, /*supports_fast_mode*/ false)
+            })
+            .collect(),
+    }
+    .models
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        CollaborationModesConfig {
+            default_mode_request_user_input: chat
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -602,6 +628,50 @@ async fn queued_unknown_slash_reports_error_when_dequeued() {
         "expected delayed slash error, got {rendered:?}"
     );
     assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_prefers_current_model_mini() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4-mini", "gpt-5.5", "gpt-5.5-mini"]);
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.5-mini"
+    );
+    assert_eq!(chat.current_model(), "gpt-5.5");
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_falls_back_to_top_alphanumeric_mini() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(
+        &mut chat,
+        &["gpt-5.4-mini", "gpt-5.5", "gpt-5.3-codex-mini"],
+    );
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.4-mini"
+    );
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_reports_missing_mini_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4", "gpt-5.5"]);
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert!(lines_to_single_string(&cells[0]).contains("No mini model"));
 }
 
 #[tokio::test]
@@ -2006,6 +2076,22 @@ async fn slash_mcp_invalid_args_show_usage() {
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/mcp full");
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_mcp_reload_requests_core_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::McpReload);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::RefreshMcpServers { config }))
+            if config.mcp_servers.is_object()
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert!(lines_to_single_string(&cells[0]).contains("reload requested"));
 }
 
 #[tokio::test]

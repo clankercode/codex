@@ -194,9 +194,9 @@ see codex log for annotated example output
   - it should clear the input though, like thse do: /model, /fast, /stop, and like most of them if not all. 
   - ensure you figure out how other commands do it first then follow repo-best-practices.
 - [x] stop hooks already support repo-scoped `.codex/hooks.json`, UI-visible `systemMessage` output, and synthetic user-message continuation via `decision: "block"` plus `reason`; only local docs/todo cleanup was needed here.
-- [ ] add slash command /compact-with-mini that will: change to gpt-5.4-mini or latest mini, run /compact, then change back to original model. This is useful after cache has expired to avoid expensive calls
-- [ ] add slash command to reload all MCP servers (/mcp-reload)
-- [ ] add CLI flag to confirm x-thin features
+- [x] add slash command /compact-with-mini that will: change to gpt-5.4-mini or latest mini, run /compact, then change back to original model. This is useful after cache has expired to avoid expensive calls
+- [x] add slash command to reload all MCP servers (/mcp-reload)
+- [x] add CLI flag to confirm x-thin features
 
 
 ---

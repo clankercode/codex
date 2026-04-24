@@ -191,6 +191,55 @@ impl ChatWidget {
         }
     }
 
+    fn compact_mini_model(&self) -> Option<String> {
+        let current_model = self.current_model();
+        let models = self.model_catalog.try_list_models().ok()?;
+        if current_model.ends_with("-mini")
+            && models.iter().any(|preset| preset.model == current_model)
+        {
+            return Some(current_model.to_string());
+        }
+
+        let current_mini_model = format!("{current_model}-mini");
+        if models
+            .iter()
+            .any(|preset| preset.model == current_mini_model)
+        {
+            return Some(current_mini_model);
+        }
+
+        models
+            .into_iter()
+            .filter(|preset| preset.model.contains("mini"))
+            .map(|preset| preset.model)
+            .max()
+    }
+
+    fn request_mcp_reload(&mut self) {
+        let Ok(mcp_servers) = serde_json::to_value(self.config.mcp_servers.get()) else {
+            self.add_error_message("Failed to serialize MCP server config.".to_string());
+            return;
+        };
+        let Ok(mcp_oauth_credentials_store_mode) =
+            serde_json::to_value(self.config.mcp_oauth_credentials_store_mode)
+        else {
+            self.add_error_message("Failed to serialize MCP OAuth config.".to_string());
+            return;
+        };
+
+        self.app_event_tx.send(AppEvent::CodexOp(
+            AppCommand::refresh_mcp_servers(McpServerRefreshConfig {
+                mcp_servers,
+                mcp_oauth_credentials_store_mode,
+            })
+            .into_core(),
+        ));
+        self.add_info_message(
+            "MCP server reload requested.".to_string(),
+            /*hint*/ None,
+        );
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -247,6 +296,19 @@ impl ChatWidget {
                     self.bottom_pane.set_task_running(/*running*/ true);
                 }
                 self.app_event_tx.compact();
+            }
+            SlashCommand::CompactWithMini => {
+                let Some(model) = self.compact_mini_model() else {
+                    self.add_error_message("No mini model is available right now.".to_string());
+                    return;
+                };
+                self.clear_token_usage();
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.app_event_tx.send(AppEvent::CodexOp(
+                    AppCommand::compact_with_model(model).into_core(),
+                ));
             }
             SlashCommand::IdleTime => {
                 let enabled = !self.idle_timing_state.injection_enabled();
@@ -467,6 +529,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::McpReload => {
+                self.request_mcp_reload();
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();

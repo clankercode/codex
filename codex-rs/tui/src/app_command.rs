@@ -14,6 +14,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
@@ -97,6 +98,12 @@ pub(crate) enum AppCommandView<'a> {
         force_reload: bool,
     },
     Compact,
+    CompactWithModel {
+        model: &'a str,
+    },
+    RefreshMcpServers {
+        config: &'a McpServerRefreshConfig,
+    },
     SetThreadName {
         name: &'a str,
     },
@@ -254,6 +261,14 @@ impl AppCommand {
         Self(Op::Compact)
     }
 
+    pub(crate) fn compact_with_model(model: String) -> Self {
+        Self(Op::CompactWithModel { model })
+    }
+
+    pub(crate) fn refresh_mcp_servers(config: McpServerRefreshConfig) -> Self {
+        Self(Op::RefreshMcpServers { config })
+    }
+
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self(Op::SetThreadName { name })
     }
@@ -380,6 +395,8 @@ impl AppCommand {
                 force_reload: *force_reload,
             },
             Op::Compact => AppCommandView::Compact,
+            Op::CompactWithModel { model } => AppCommandView::CompactWithModel { model },
+            Op::RefreshMcpServers { config } => AppCommandView::RefreshMcpServers { config },
             Op::SetThreadName { name } => AppCommandView::SetThreadName { name },
             Op::Shutdown => AppCommandView::Shutdown,
             Op::ThreadRollback { num_turns } => AppCommandView::ThreadRollback {

@@ -272,8 +272,9 @@ async fn effective_patch_permissions(
         session.granted_session_permissions().await.as_ref(),
         session.granted_turn_permissions().await.as_ref(),
     );
+    let runtime_permissions = turn.runtime_permissions().await;
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-        &turn.file_system_sandbox_policy,
+        &runtime_permissions.file_system_sandbox_policy,
         granted_permissions.as_ref(),
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
@@ -429,7 +430,7 @@ impl ToolHandler for ApplyPatchHandler {
                                 &req,
                                 &tool_ctx,
                                 turn.as_ref(),
-                                turn.approval_policy.value(),
+                                turn.runtime_permissions().await.approval_policy,
                             )
                             .await
                             .map(|result| result.output);
@@ -537,7 +538,7 @@ pub(crate) async fn intercept_apply_patch(
                             &req,
                             &tool_ctx,
                             turn.as_ref(),
-                            turn.approval_policy.value(),
+                            turn.runtime_permissions().await.approval_policy,
                         )
                         .await
                         .map(|result| result.output);

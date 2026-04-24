@@ -33,6 +33,7 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -657,6 +658,10 @@ struct MinimalContextOptions {
     /// for text-provider integrations.
     #[arg(long = "text-provider", alias = "minimal-context", global = true)]
     text_provider: bool,
+
+    /// Print whether the x-thin/text-provider feature bundle is active and exit.
+    #[arg(long = "x-thin-check", global = true)]
+    x_thin_check: bool,
 }
 
 impl FeatureToggles {
@@ -683,12 +688,8 @@ impl FeatureToggles {
 }
 
 impl MinimalContextOptions {
-    fn to_overrides(&self) -> Vec<String> {
-        if !self.text_provider {
-            return Vec::new();
-        }
-
-        [
+    fn expected_overrides() -> &'static [&'static str] {
+        &[
             "features.shell_tool=false",
             "features.apps=false",
             "features.plugins=false",
@@ -703,10 +704,132 @@ impl MinimalContextOptions {
             "include_apps_instructions=false",
             "include_permissions_instructions=false",
         ]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
     }
+
+    fn to_overrides(&self) -> Vec<String> {
+        if !self.text_provider {
+            return Vec::new();
+        }
+
+        Self::expected_overrides()
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
+    }
+}
+
+fn x_thin_effective_overrides(config: &Config) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        (
+            "features.shell_tool",
+            config
+                .features
+                .enabled(codex_features::Feature::ShellTool)
+                .to_string(),
+        ),
+        (
+            "features.apps",
+            config
+                .features
+                .enabled(codex_features::Feature::Apps)
+                .to_string(),
+        ),
+        (
+            "features.plugins",
+            config
+                .features
+                .enabled(codex_features::Feature::Plugins)
+                .to_string(),
+        ),
+        (
+            "features.tool_search",
+            config
+                .features
+                .enabled(codex_features::Feature::ToolSearch)
+                .to_string(),
+        ),
+        (
+            "features.tool_suggest",
+            config
+                .features
+                .enabled(codex_features::Feature::ToolSuggest)
+                .to_string(),
+        ),
+        (
+            "features.image_generation",
+            config
+                .features
+                .enabled(codex_features::Feature::ImageGeneration)
+                .to_string(),
+        ),
+        (
+            "features.multi_agent",
+            config
+                .features
+                .enabled(codex_features::Feature::MultiAgentV2)
+                .to_string(),
+        ),
+        (
+            "features.memories",
+            config
+                .features
+                .enabled(codex_features::Feature::MemoryTool)
+                .to_string(),
+        ),
+        (
+            "features.skill_mcp_dependency_install",
+            config
+                .features
+                .enabled(codex_features::Feature::SkillMcpDependencyInstall)
+                .to_string(),
+        ),
+        (
+            "skills.bundled.enabled",
+            config.bundled_skills_enabled().to_string(),
+        ),
+        (
+            "project_doc_max_bytes",
+            config.project_doc_max_bytes.to_string(),
+        ),
+        (
+            "include_apps_instructions",
+            config.include_apps_instructions.to_string(),
+        ),
+        (
+            "include_permissions_instructions",
+            config.include_permissions_instructions.to_string(),
+        ),
+    ])
+}
+
+fn x_thin_expected_overrides() -> BTreeMap<&'static str, &'static str> {
+    MinimalContextOptions::expected_overrides()
+        .iter()
+        .filter_map(|override_value| override_value.split_once('='))
+        .collect()
+}
+
+fn x_thin_check_report(config: &Config) -> serde_json::Value {
+    let effective = x_thin_effective_overrides(config);
+    let mismatches = x_thin_expected_overrides()
+        .into_iter()
+        .filter_map(|(key, expected)| {
+            let actual = effective.get(key)?;
+            (actual != expected).then(|| {
+                serde_json::json!({
+                    "key": key,
+                    "expected": expected,
+                    "actual": actual,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "active": mismatches.is_empty(),
+        "effective": effective,
+        "mismatches": mismatches,
+    })
 }
 
 #[derive(Debug, Parser)]
@@ -766,6 +889,35 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         .extend(minimal_context.to_overrides());
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
+
+    if minimal_context.x_thin_check {
+        let mut cli_kv_overrides = root_config_overrides
+            .parse_overrides()
+            .map_err(anyhow::Error::msg)?;
+        if interactive.web_search {
+            cli_kv_overrides.push((
+                "web_search".to_string(),
+                toml::Value::String("live".to_string()),
+            ));
+        }
+        let overrides = ConfigOverrides {
+            config_profile: interactive.config_profile.clone(),
+            ..Default::default()
+        };
+        let config =
+            Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides)
+                .await?;
+        let report = x_thin_check_report(&config);
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if report
+            .get("active")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        std::process::exit(1);
+    }
 
     match subcommand {
         None => {
@@ -2553,6 +2705,7 @@ mod tests {
     fn text_provider_flag_generates_thin_override_bundle() {
         let overrides = MinimalContextOptions {
             text_provider: true,
+            x_thin_check: false,
         }
         .to_overrides();
         assert_eq!(

@@ -24,7 +24,6 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
@@ -37,6 +36,7 @@ use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -46,6 +46,7 @@ use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -905,7 +906,10 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if routes_approval_to_guardian(turn_context) {
+    let runtime_permissions = turn_context.runtime_permissions().await;
+    if runtime_permissions.approval_policy == AskForApproval::OnRequest
+        && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+    {
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,

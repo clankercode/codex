@@ -186,6 +186,7 @@ use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
+use codex_protocol::protocol::McpServerRefreshConfig;
 #[cfg(test)]
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
