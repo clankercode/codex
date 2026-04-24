@@ -12,6 +12,7 @@ use codex_turn_start_bridge_core::QueuedMessage;
 use codex_turn_start_bridge_core::ReleaseDecision;
 use codex_turn_start_bridge_core::ReleaseReason;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::bottom_pane::StructuredInputPreviewEntry;
 
@@ -43,6 +44,7 @@ pub(crate) enum StructuredInputAction {
 
 pub(crate) struct StructuredInputRuntime {
     receiver: mpsc::UnboundedReceiver<StructuredInputReaderEvent>,
+    reader_task: Option<JoinHandle<()>>,
     reader_active: bool,
     startup_system_prompt: Option<String>,
     startup_locked: bool,
@@ -58,10 +60,11 @@ impl StructuredInputRuntime {
 
         #[cfg(unix)]
         {
-            let receiver = unix::spawn_xml_input_reader(xml_input_fd)
+            let (receiver, reader_task) = unix::spawn_xml_input_reader(xml_input_fd)
                 .map_err(color_eyre::eyre::Report::new)?;
             Ok(Some(Self {
                 receiver,
+                reader_task: Some(reader_task),
                 reader_active: true,
                 startup_system_prompt: None,
                 startup_locked: false,
@@ -336,6 +339,14 @@ impl StructuredInputRuntime {
     }
 }
 
+impl Drop for StructuredInputRuntime {
+    fn drop(&mut self) {
+        if let Some(handle) = self.reader_task.take() {
+            handle.abort();
+        }
+    }
+}
+
 fn preview_entries_for_controller(
     controller: &BridgeController,
 ) -> Vec<StructuredInputPreviewEntry> {
@@ -447,6 +458,7 @@ mod tests {
         (
             StructuredInputRuntime {
                 receiver: rx,
+                reader_task: None,
                 reader_active: true,
                 startup_system_prompt: None,
                 startup_locked: false,

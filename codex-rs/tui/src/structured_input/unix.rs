@@ -6,12 +6,16 @@ use std::os::fd::FromRawFd;
 use codex_turn_start_bridge_core::XmlInputParser;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use super::StructuredInputReaderEvent;
 
 pub(crate) fn spawn_xml_input_reader(
     xml_input_fd: i32,
-) -> std::io::Result<mpsc::UnboundedReceiver<StructuredInputReaderEvent>> {
+) -> std::io::Result<(
+    mpsc::UnboundedReceiver<StructuredInputReaderEvent>,
+    JoinHandle<()>,
+)> {
     if xml_input_fd < 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -22,7 +26,7 @@ pub(crate) fn spawn_xml_input_reader(
     let (tx, rx) = mpsc::unbounded_channel();
     let mut file = unsafe { File::from_raw_fd(xml_input_fd) };
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut parser = XmlInputParser::default();
         let mut pending_utf8_bytes = Vec::new();
         let original_flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
@@ -114,7 +118,7 @@ pub(crate) fn spawn_xml_input_reader(
         }
     });
 
-    Ok(rx)
+    Ok((rx, handle))
 }
 
 fn forward_parsed_input(
@@ -232,7 +236,7 @@ mod tests {
 
         let read_end = fds[0];
         let mut write_end = unsafe { File::from_raw_fd(fds[1]) };
-        let mut rx = spawn_xml_input_reader(read_end).expect("reader should start");
+        let (mut rx, _handle) = spawn_xml_input_reader(read_end).expect("reader should start");
 
         write!(
             write_end,
@@ -262,6 +266,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aborting_reader_handle_closes_open_pipe_without_eof() {
+        let mut fds = [0; 2];
+        let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(result, 0, "pipe should be created");
+
+        let read_end = fds[0];
+        let write_end = unsafe { File::from_raw_fd(fds[1]) };
+        let (mut rx, handle) = spawn_xml_input_reader(read_end).expect("reader should start");
+
+        handle.abort();
+        let event = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("reader did not close after abort");
+        assert!(event.is_none(), "aborted reader should close the channel");
+
+        drop(write_end);
+    }
+
+    #[tokio::test]
     async fn malformed_fragment_and_partial_following_valid_fragment_are_recovered_across_reads() {
         let mut fds = [0; 2];
         let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
@@ -269,7 +292,7 @@ mod tests {
 
         let read_end = fds[0];
         let mut write_end = unsafe { File::from_raw_fd(fds[1]) };
-        let mut rx = spawn_xml_input_reader(read_end).expect("reader should start");
+        let (mut rx, _handle) = spawn_xml_input_reader(read_end).expect("reader should start");
 
         write!(write_end, "<message type=\"user\"><broken <mess").expect("write should succeed");
         write!(write_end, "age type=\"user\">ok</message>").expect("write should succeed");
@@ -303,7 +326,7 @@ mod tests {
 
         let read_end = fds[0];
         let mut write_end = unsafe { File::from_raw_fd(fds[1]) };
-        let mut rx = spawn_xml_input_reader(read_end).expect("reader should start");
+        let (mut rx, _handle) = spawn_xml_input_reader(read_end).expect("reader should start");
 
         write!(write_end, "<message type=\"user\">caf").expect("write should succeed");
         write_end.write_all(&[0xC3]).expect("write should succeed");
@@ -341,7 +364,7 @@ mod tests {
 
         let read_end = fds[0];
         let mut write_end = unsafe { File::from_raw_fd(fds[1]) };
-        let mut rx = spawn_xml_input_reader(read_end).expect("reader should start");
+        let (mut rx, _handle) = spawn_xml_input_reader(read_end).expect("reader should start");
 
         write!(write_end, "<message type=\"user\">").expect("write should succeed");
         write_end.write_all(&[0xFF]).expect("write should succeed");
