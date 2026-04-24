@@ -120,6 +120,16 @@ If the `queue` attribute is present, existing queue-mode semantics must be honor
 
 If the `queue` attribute is absent, normal default queue semantics apply.
 
+For unsolicited inbound sideband traffic such as c2c broker messages, callers
+should prefer:
+
+```xml
+<message type="user" queue="AfterAnyItem">...</message>
+```
+
+`AfterAnyItem` should release on the next completed assistant turn item
+boundary, not only after tool calls.
+
 ### 7. Failure isolation
 
 Malformed XML must not crash or wedge the TUI.

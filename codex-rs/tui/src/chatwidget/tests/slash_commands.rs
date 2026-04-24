@@ -1365,7 +1365,7 @@ async fn permissions_all_command_opens_full_access_confirmation_while_task_runni
                 preset,
                 return_to_permissions,
             } if preset.id == "full-access"
-                && *return_to_permissions == !cfg!(target_os = "windows")
+                && *return_to_permissions != cfg!(target_os = "windows")
         )),
         "expected full access confirmation prompt; events: {events:?}"
     );

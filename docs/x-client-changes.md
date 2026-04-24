@@ -90,6 +90,15 @@ Rules:
   behavior and currently fail with a clear unsupported-type error.
 - `queue` is optional and uses the existing `QueueMode` names.
 - Missing `queue` means `Default`.
+- Operational guidance:
+  - plain `<message type="user">...</message>` uses the default queue mode and
+    is best for ordinary host-driven input when the caller is willing to accept
+    Codex's configured default behavior
+  - `queue="AfterToolCall"` releases after the next tool or other
+    terminal-interaction boundary
+  - `queue="AfterAnyItem"` releases after the next completed assistant turn
+    item except `UserMessage` and `HookPrompt`; this is the safest choice for
+    unsolicited inbound sideband traffic such as c2c broker deliveries
 - XML entity decoding is supported.
 - CDATA is supported, including text that looks like `</message>`.
 - Nested inner XML inside `<message type="user">...</message>` is preserved
@@ -161,6 +170,8 @@ When `--xml-input-fd` is used:
 - queued sideband messages reuse `BridgeController` queue semantics, driven by
   the same `turn/started`, `turn/completed`, `terminalInteraction`, and
   `item/completed` notifications used by the bridge
+- `AfterAnyItem` now means the next completed assistant turn item boundary,
+  not only tool-call completions
 - queued sideband messages are shown in the TUI pending-input preview as a
   separate "Queued structured input" section
 - startup-side notices such as early parse errors, rejected late

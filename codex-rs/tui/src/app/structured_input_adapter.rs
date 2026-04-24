@@ -259,6 +259,10 @@ impl App {
                                     let mut store = channel.store.lock().await;
                                     store.active_turn_id = Some(turn_id.clone());
                                 }
+                                if let Some(runtime) = self.structured_input.as_mut() {
+                                    let _ =
+                                        runtime.reconcile_active_turn(thread_id, turn_id.clone());
+                                }
                                 steer_turn_id = turn_id;
                                 retried_after_turn_mismatch = true;
                             }
@@ -267,7 +271,10 @@ impl App {
                             }) => {
                                 if let Some(channel) = self.thread_event_channels.get(&thread_id) {
                                     let mut store = channel.store.lock().await;
-                                    store.active_turn_id = Some(turn_id);
+                                    store.active_turn_id = Some(turn_id.clone());
+                                }
+                                if let Some(runtime) = self.structured_input.as_mut() {
+                                    let _ = runtime.reconcile_active_turn(thread_id, turn_id);
                                 }
                                 break Ok(vec![StructuredInputAction::Error(format!(
                                     "Structured input turn/steer failed for thread {thread_id}: {error}"

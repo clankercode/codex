@@ -42,6 +42,10 @@ pub enum ControllerEvent {
         thread_id: String,
         turn_id: String,
     },
+    ActiveTurnReconciled {
+        thread_id: String,
+        turn_id: String,
+    },
     TurnCompleted {
         thread_id: String,
         turn_id: String,
@@ -183,6 +187,9 @@ impl BridgeController {
             }
             ControllerEvent::TurnStarted { thread_id, turn_id } => {
                 self.on_turn_started(thread_id, turn_id)
+            }
+            ControllerEvent::ActiveTurnReconciled { thread_id, turn_id } => {
+                self.on_active_turn_reconciled(thread_id, turn_id)
             }
             ControllerEvent::TurnCompleted { thread_id, turn_id } => {
                 self.on_turn_completed(thread_id, turn_id)
@@ -364,6 +371,51 @@ impl BridgeController {
             TurnState::Idle => {
                 self.turn_state = TurnState::Running { turn_id };
             }
+        }
+
+        None
+    }
+
+    fn on_active_turn_reconciled(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+    ) -> Option<ReleaseDecision> {
+        if thread_id != self.thread_id {
+            return None;
+        }
+
+        if self
+            .pending_turn_completed_id
+            .as_deref()
+            .is_some_and(|id| id != turn_id)
+        {
+            self.pending_turn_completed_id = None;
+        }
+
+        match &mut self.turn_state {
+            TurnState::Running {
+                turn_id: active_turn_id,
+            } => {
+                *active_turn_id = turn_id.clone();
+            }
+            TurnState::BusyUnknownTurn => {
+                self.turn_state = TurnState::Running {
+                    turn_id: turn_id.clone(),
+                };
+            }
+            TurnState::TurnStartPending { reserved_turn_id } => {
+                *reserved_turn_id = Some(turn_id.clone());
+            }
+            TurnState::Idle => {
+                self.turn_state = TurnState::Running {
+                    turn_id: turn_id.clone(),
+                };
+            }
+        }
+
+        if self.pending_steer_turn_id.is_some() {
+            self.pending_steer_turn_id = Some(turn_id);
         }
 
         None
@@ -1135,6 +1187,54 @@ mod tests {
             controller.take_validation_error(),
             Some("turn/started turn id `turn-2` did not match active turn id `turn-1`".to_string())
         );
+    }
+
+    #[test]
+    fn reconciled_active_turn_updates_pending_steer_target_and_avoids_later_mismatch() {
+        let mut controller = running_controller();
+
+        assert_eq!(
+            controller.on_event(ControllerEvent::MessageReceived(queued(
+                QueueMode::Immediate,
+                "interrupt",
+            ))),
+            Some(ReleaseDecision {
+                action: ReleaseAction::SteerTurn {
+                    turn_id: "turn-1".to_string(),
+                },
+                reason: ReleaseReason::Immediate,
+                message: queued(QueueMode::Immediate, "interrupt"),
+            })
+        );
+
+        assert_eq!(
+            controller.on_event(ControllerEvent::ActiveTurnReconciled {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-2".to_string(),
+            }),
+            None
+        );
+        assert_eq!(
+            controller.turn_state(),
+            &TurnState::Running {
+                turn_id: "turn-2".to_string(),
+            }
+        );
+
+        assert_eq!(
+            controller.on_event(ControllerEvent::SteerAccepted {
+                turn_id: "turn-2".to_string(),
+            }),
+            None
+        );
+        assert_eq!(
+            controller.on_event(ControllerEvent::TurnStarted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-2".to_string(),
+            }),
+            None
+        );
+        assert_eq!(controller.take_validation_error(), None);
     }
 
     #[test]

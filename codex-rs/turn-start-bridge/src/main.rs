@@ -605,14 +605,21 @@ fn on_notification(
 
 fn classify_item_completed(payload: &ItemCompletedNotification) -> CompletionSignal {
     match &payload.item {
-        ThreadItem::CommandExecution { .. }
+        ThreadItem::UserMessage { .. } | ThreadItem::HookPrompt { .. } => CompletionSignal::Ignore,
+        ThreadItem::AgentMessage { .. }
+        | ThreadItem::Plan { .. }
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }
         | ThreadItem::McpToolCall { .. }
         | ThreadItem::DynamicToolCall { .. }
         | ThreadItem::CollabAgentToolCall { .. }
         | ThreadItem::WebSearch { .. }
-        | ThreadItem::ImageGeneration { .. } => CompletionSignal::ReleasesAfterAnyItem,
-        _ => CompletionSignal::Ignore,
+        | ThreadItem::ImageView { .. }
+        | ThreadItem::ImageGeneration { .. }
+        | ThreadItem::EnteredReviewMode { .. }
+        | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::ContextCompaction { .. } => CompletionSignal::ReleasesAfterAnyItem,
     }
 }
 
@@ -1079,16 +1086,20 @@ mod tests {
     use super::unsupported_server_request_failure;
     use super::validate_unique_sideband_fds;
     use super::validate_xml_input_mode;
+    use super::classify_item_completed;
     use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
     use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
+    use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::SessionSource;
     use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
+    use codex_turn_start_bridge_core::CompletionSignal;
     use codex_app_server_protocol::ToolRequestUserInputOption;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -1505,6 +1516,23 @@ mod tests {
         assert!(should_retry_steer_next_turn("cannot steer a review turn"));
         assert!(should_retry_steer_next_turn("cannot steer a compact turn"));
         assert!(!should_retry_steer_next_turn("network timeout"));
+    }
+
+    #[test]
+    fn classify_item_completed_releases_after_agent_message_items() {
+        assert_eq!(
+            classify_item_completed(&ItemCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::AgentMessage {
+                    id: "item-1".to_string(),
+                    text: "hello".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            }),
+            CompletionSignal::ReleasesAfterAnyItem
+        );
     }
 
     #[test]

@@ -250,6 +250,33 @@ impl StructuredInputRuntime {
         actions
     }
 
+    pub(crate) fn reconcile_active_turn(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: String,
+    ) -> Vec<StructuredInputAction> {
+        let Some(controller) = self.controllers.get_mut(&thread_id) else {
+            return Vec::new();
+        };
+        let decision = controller.on_event(ControllerEvent::ActiveTurnReconciled {
+            thread_id: thread_id.to_string(),
+            turn_id,
+        });
+        let mut actions = vec![StructuredInputAction::RefreshPreview];
+        if let Some(message) = controller.take_validation_error() {
+            actions.push(StructuredInputAction::Error(format!(
+                "Structured input controller validation error for thread {thread_id}: {message}"
+            )));
+        }
+        if let Some(decision) = decision {
+            actions.push(StructuredInputAction::Release {
+                thread_id,
+                decision,
+            });
+        }
+        actions
+    }
+
     pub(crate) fn preview_for_thread(
         &self,
         thread_id: Option<ThreadId>,
@@ -368,14 +395,21 @@ fn controller_event_from_notification(
 
 fn classify_item_completed(item: &ThreadItem) -> CompletionSignal {
     match item {
-        ThreadItem::CommandExecution { .. }
+        ThreadItem::UserMessage { .. } | ThreadItem::HookPrompt { .. } => CompletionSignal::Ignore,
+        ThreadItem::AgentMessage { .. }
+        | ThreadItem::Plan { .. }
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }
         | ThreadItem::McpToolCall { .. }
         | ThreadItem::DynamicToolCall { .. }
+        | ThreadItem::CollabAgentToolCall { .. }
         | ThreadItem::WebSearch { .. }
+        | ThreadItem::ImageView { .. }
         | ThreadItem::ImageGeneration { .. }
-        | ThreadItem::CollabAgentToolCall { .. } => CompletionSignal::ReleasesAfterAnyItem,
-        _ => CompletionSignal::Ignore,
+        | ThreadItem::EnteredReviewMode { .. }
+        | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::ContextCompaction { .. } => CompletionSignal::ReleasesAfterAnyItem,
     }
 }
 
@@ -579,6 +613,76 @@ mod tests {
             actions
                 .iter()
                 .any(|action| matches!(action, StructuredInputAction::Error(_)))
+        );
+    }
+
+    #[test]
+    fn reconcile_active_turn_updates_controller_state() {
+        let thread_id = ThreadId::new();
+        let (mut runtime, _tx) = runtime();
+        runtime
+            .controllers
+            .insert(thread_id, BridgeController::new(thread_id.to_string()));
+        runtime.handle_controller_event(
+            thread_id,
+            ControllerEvent::TurnStarted {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+            },
+        );
+        runtime.handle_controller_event(
+            thread_id,
+            ControllerEvent::MessageReceived(QueuedMessage {
+                queue_mode: QueueMode::Immediate,
+                text: "interrupt".to_string(),
+            }),
+        );
+
+        let actions = runtime.reconcile_active_turn(thread_id, "turn-2".to_string());
+
+        assert_eq!(actions, vec![StructuredInputAction::RefreshPreview]);
+        assert_eq!(
+            runtime.handle_controller_event(
+                thread_id,
+                ControllerEvent::SteerAccepted {
+                    turn_id: "turn-2".to_string(),
+                },
+            ),
+            vec![StructuredInputAction::RefreshPreview]
+        );
+        assert_eq!(
+            runtime.handle_controller_event(
+                thread_id,
+                ControllerEvent::TurnStarted {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-2".to_string(),
+                },
+            ),
+            vec![StructuredInputAction::RefreshPreview]
+        );
+    }
+
+    #[test]
+    fn classify_item_completed_releases_after_agent_message_items() {
+        assert_eq!(
+            classify_item_completed(&ThreadItem::AgentMessage {
+                id: "item-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            }),
+            CompletionSignal::ReleasesAfterAnyItem
+        );
+    }
+
+    #[test]
+    fn classify_item_completed_ignores_user_message_items() {
+        assert_eq!(
+            classify_item_completed(&ThreadItem::UserMessage {
+                id: "item-1".to_string(),
+                content: Vec::new(),
+            }),
+            CompletionSignal::Ignore
         );
     }
 }
