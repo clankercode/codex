@@ -218,7 +218,7 @@ rebase_in_progress() {
 
 fetch_remote_refs() {
   log "Fetching remotes"
-  run git fetch --tags "$UPSTREAM_REMOTE"
+  run git fetch "$UPSTREAM_REMOTE" "$MAIN_BRANCH"
   run git fetch "$ORIGIN_REMOTE" "$TOPIC_BRANCH"
 }
 
@@ -263,14 +263,14 @@ rebase_topic() {
 }
 
 build_branch() {
-  log "Building local runtime crates"
-  if ! run_cargo build -p codex-cli -p codex-turn-start-bridge; then
+  log "Building local runtime crates with Bazel"
+  if ! run bazel build //codex-rs/cli:cli //codex-rs/turn-start-bridge:codex-turn-start-bridge; then
     if ! ccc_repair "build" "The build failed after rebasing $TOPIC_WORK_BRANCH onto $MAIN_WORK_BRANCH."; then
       die "build failed"
     fi
 
     log "Retrying build after ccc repair"
-    if ! run_cargo build -p codex-cli -p codex-turn-start-bridge; then
+    if ! run bazel build //codex-rs/cli:cli //codex-rs/turn-start-bridge:codex-turn-start-bridge; then
       die "build still failing after ccc repair"
     fi
   fi
@@ -331,7 +331,7 @@ main() {
     exit 0
   fi
 
-  require_command cargo
+  require_command bazel
   require_command just
 
   prepare_maintenance_branch
