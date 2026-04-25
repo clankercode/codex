@@ -2737,8 +2737,10 @@ impl App {
                     ));
                 }
             }
-            SidebandResponseEvent::ParseError(message)
-            | SidebandResponseEvent::ReadError(message) => {
+            SidebandResponseEvent::ParseError(message) => {
+                tracing::warn!("{message}");
+            }
+            SidebandResponseEvent::ReadError(message) => {
                 tracing::warn!("{message}");
                 sideband.close_response_reader(&message);
             }
