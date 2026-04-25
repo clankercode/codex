@@ -284,6 +284,17 @@ impl StructuredInputRuntime {
         actions
     }
 
+    pub(crate) fn sync_active_turn(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: String,
+    ) -> Vec<StructuredInputAction> {
+        self.controllers
+            .entry(thread_id)
+            .or_insert_with(|| BridgeController::new(thread_id.to_string()));
+        self.reconcile_active_turn(thread_id, turn_id)
+    }
+
     pub(crate) fn preview_for_thread(
         &self,
         thread_id: Option<ThreadId>,
@@ -566,6 +577,31 @@ mod tests {
             },
             tx,
         )
+    }
+
+    #[test]
+    fn first_bound_message_respects_existing_active_turn() {
+        let thread_id = ThreadId::new();
+        let (mut runtime, _tx) = runtime();
+
+        let sync_actions = runtime.sync_active_turn(thread_id, "turn-1".to_string());
+        let actions = runtime.handle_reader_event(
+            StructuredInputReaderEvent::Parsed(ParsedXmlInput::Message(ParsedMessage {
+                queue_mode: QueueMode::Default,
+                text: "queued while busy".to_string(),
+            })),
+            Some(thread_id),
+        );
+
+        assert_eq!(sync_actions, vec![StructuredInputAction::RefreshPreview]);
+        assert_eq!(actions, vec![StructuredInputAction::RefreshPreview]);
+        assert_eq!(
+            runtime.preview_for_thread(Some(thread_id)),
+            vec![StructuredInputPreviewEntry {
+                queue_mode: QueueMode::AfterToolCall,
+                text: "queued while busy".to_string(),
+            }]
+        );
     }
 
     #[tokio::test]

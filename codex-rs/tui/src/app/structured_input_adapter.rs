@@ -61,10 +61,18 @@ impl App {
         event: StructuredInputReaderEvent,
     ) -> Result<()> {
         let current_thread_id = self.current_displayed_thread_id();
+        let active_turn_id = match current_thread_id {
+            Some(thread_id) => self.active_turn_id_for_thread(thread_id).await,
+            None => None,
+        };
         let Some(runtime) = self.structured_input.as_mut() else {
             return Ok(());
         };
-        let actions = runtime.handle_reader_event(event, current_thread_id);
+        let mut actions = Vec::new();
+        if let (Some(thread_id), Some(turn_id)) = (current_thread_id, active_turn_id) {
+            actions.extend(runtime.sync_active_turn(thread_id, turn_id));
+        }
+        actions.extend(runtime.handle_reader_event(event, current_thread_id));
         self.apply_structured_input_actions(app_server, actions)
             .await
     }
@@ -77,10 +85,15 @@ impl App {
             self.refresh_structured_input_preview();
             return Ok(());
         };
+        let active_turn_id = self.active_turn_id_for_thread(thread_id).await;
         let Some(runtime) = self.structured_input.as_mut() else {
             return Ok(());
         };
-        let actions = runtime.bind_unbound_messages(thread_id);
+        let mut actions = Vec::new();
+        if let Some(turn_id) = active_turn_id {
+            actions.extend(runtime.sync_active_turn(thread_id, turn_id));
+        }
+        actions.extend(runtime.bind_unbound_messages(thread_id));
         self.apply_structured_input_actions(app_server, actions)
             .await
     }

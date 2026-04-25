@@ -193,10 +193,10 @@ impl PendingInputPreview {
 
 fn queue_mode_label(queue_mode: QueueMode) -> &'static str {
     match queue_mode {
-        QueueMode::Default | QueueMode::AfterToolCall => "AfterToolCall",
-        QueueMode::AfterAnyItem => "AfterAnyItem",
-        QueueMode::Immediate => "Immediate",
-        QueueMode::NextTurn => "NextTurn",
+        QueueMode::Default | QueueMode::AfterToolCall => "AfterToolCall: next tool boundary",
+        QueueMode::AfterAnyItem => "AfterAnyItem: next assistant item",
+        QueueMode::Immediate => "Immediate: current turn",
+        QueueMode::NextTurn => "NextTurn: after current turn",
     }
 }
 
@@ -416,5 +416,30 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_structured_input_message", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn render_structured_input_release_conditions() {
+        let mut queue = PendingInputPreview::new();
+        queue.structured_messages.push(StructuredInputPreviewEntry {
+            queue_mode: QueueMode::AfterToolCall,
+            text: "after tool".to_string(),
+        });
+        queue.structured_messages.push(StructuredInputPreviewEntry {
+            queue_mode: QueueMode::AfterAnyItem,
+            text: "after item".to_string(),
+        });
+        queue.structured_messages.push(StructuredInputPreviewEntry {
+            queue_mode: QueueMode::NextTurn,
+            text: "next turn".to_string(),
+        });
+        let width = 64;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!(
+            "render_structured_input_release_conditions",
+            format!("{buf:?}")
+        );
     }
 }

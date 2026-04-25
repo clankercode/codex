@@ -88,7 +88,9 @@ Rules:
 - Only `type="user"` is supported today.
 - Other message types, such as `system` or `assistant`, are reserved for future
   behavior and currently fail with a clear unsupported-type error.
-- `queue` is optional and uses the existing `QueueMode` names.
+- `queue` is optional and uses the existing `QueueMode` names. Both
+  `AfterToolCall`/`AfterAnyItem` and `after-tool-call`/`after-any-item`
+  spellings are accepted.
 - Missing `queue` means `Default`.
 - Operational guidance:
   - plain `<message type="user">...</message>` uses the default queue mode and
