@@ -58,6 +58,9 @@ The new bridge sideband flags are Unix-only in v1:
 - `--approvals-reviewer` forwards a thread/turn approvals reviewer override
   into `thread/start`, `thread/resume`, and later `turn/start`
 
+For fd lifecycle and ownership guidance when embedding these sidebands, see
+[`x-fd-sideband-guide.md`](./x-fd-sideband-guide.md).
+
 `codex` TUI now also accepts:
 
 ```bash
