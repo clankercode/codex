@@ -153,6 +153,7 @@ mod render;
 mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
+mod server_request_sideband;
 mod session_log;
 mod shimmer;
 mod skills_helpers;
@@ -244,6 +245,7 @@ pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::server_request_sideband::ServerRequestSideband;
 use crate::structured_input::StructuredInputRuntime;
 use crate::tui::Tui;
 pub use cli::Cli;
@@ -1086,6 +1088,7 @@ async fn run_ratatui_app(
     session_log::maybe_init(&initial_config);
 
     let mut structured_input = StructuredInputRuntime::from_xml_input_fd(cli.xml_input_fd)?;
+    let server_request_sideband = ServerRequestSideband::from_cli(&cli)?;
 
     let mut app_server = Some(
         match start_app_server(
@@ -1457,6 +1460,7 @@ async fn run_ratatui_app(
         remote_auth_token,
         environment_manager,
         structured_input.take(),
+        server_request_sideband,
     )
     .await;
 

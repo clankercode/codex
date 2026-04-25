@@ -17,12 +17,15 @@ The x-thin Codex paths currently use these Unix-only inherited descriptors:
   XML-framed user messages from this fd.
 - `--thread-id-fd <fd>`: `codex-turn-start-bridge` writes one thread handoff
   JSON line after thread start or resume.
-- `--server-request-events-fd <fd>`: bridge writes server request events.
-- `--server-request-responses-fd <fd>`: bridge reads responses to server
-  request events.
-- `--control-events-fd <fd>`: bridge writes unified control events, including
-  `thread_resolved`.
-- `--control-responses-fd <fd>`: bridge reads unified control responses.
+- `--server-request-events-fd <fd>`: `codex-turn-start-bridge` and
+  interactive `codex` write server request events.
+- `--server-request-responses-fd <fd>`: `codex-turn-start-bridge` and
+  interactive `codex` read responses to server request events.
+- `--control-events-fd <fd>`: `codex-turn-start-bridge` writes unified control
+  events, including `thread_resolved`; interactive `codex` writes the same
+  server request events to this lane.
+- `--control-responses-fd <fd>`: `codex-turn-start-bridge` and interactive
+  `codex` read unified control responses.
 
 Each flag names the fd number as seen by the Codex child after `exec`. Do not
 reuse one fd number for multiple sideband flags. The bridge validates this, but

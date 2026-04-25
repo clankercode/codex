@@ -2,6 +2,7 @@ mod chunking;
 mod controller;
 mod message;
 mod queue_mode;
+pub mod sideband;
 
 pub use chunking::ChunkAccumulator;
 pub use chunking::QuiescencePolicy;

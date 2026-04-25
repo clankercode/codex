@@ -3,8 +3,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-mod sideband;
-
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
@@ -39,12 +37,13 @@ use codex_turn_start_bridge_core::ReleaseAction;
 use codex_turn_start_bridge_core::ReleaseDecision;
 use codex_turn_start_bridge_core::XmlInputParser;
 use codex_turn_start_bridge_core::parse_prefixed_message;
+use codex_turn_start_bridge_core::sideband;
+use codex_turn_start_bridge_core::sideband::ManagedServerRequest;
+use codex_turn_start_bridge_core::sideband::ServerRequestResolution;
+use codex_turn_start_bridge_core::sideband::SidebandOutputs;
+use codex_turn_start_bridge_core::sideband::SidebandResponseEvent;
+use codex_turn_start_bridge_core::sideband::ThreadResolvedPayload;
 use codex_utils_cli::CliConfigOverrides;
-use sideband::ManagedServerRequest;
-use sideband::ServerRequestResolution;
-use sideband::SidebandOutputs;
-use sideband::SidebandResponseEvent;
-use sideband::ThreadResolvedPayload;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;

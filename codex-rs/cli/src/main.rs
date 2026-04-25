@@ -1804,24 +1804,34 @@ fn finalize_fork_interactive(
 /// root-level flags. Only overrides fields explicitly set on the subcommand-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
 fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
-    let TuiCli {
-        shared,
-        approval_policy,
-        web_search,
-        prompt,
-        config_overrides,
-        ..
-    } = subcommand_cli;
     interactive
         .shared
-        .apply_subcommand_overrides(shared.into_inner());
-    if let Some(approval) = approval_policy {
+        .apply_subcommand_overrides(subcommand_cli.shared.into_inner());
+    if let Some(approval) = subcommand_cli.approval_policy {
         interactive.approval_policy = Some(approval);
     }
-    if web_search {
+    if subcommand_cli.web_search {
         interactive.web_search = true;
     }
-    if let Some(prompt) = prompt {
+    if let Some(fd) = subcommand_cli.server_request_events_fd {
+        interactive.server_request_events_fd = Some(fd);
+    }
+    if let Some(fd) = subcommand_cli.server_request_responses_fd {
+        interactive.server_request_responses_fd = Some(fd);
+    }
+    if let Some(fd) = subcommand_cli.control_events_fd {
+        interactive.control_events_fd = Some(fd);
+    }
+    if let Some(fd) = subcommand_cli.control_responses_fd {
+        interactive.control_responses_fd = Some(fd);
+    }
+    if !subcommand_cli.images.is_empty() {
+        interactive.images = subcommand_cli.images;
+    }
+    if !subcommand_cli.add_dir.is_empty() {
+        interactive.add_dir.extend(subcommand_cli.add_dir);
+    }
+    if let Some(prompt) = subcommand_cli.prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
@@ -1829,7 +1839,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     interactive
         .config_overrides
         .raw_overrides
-        .extend(config_overrides.raw_overrides);
+        .extend(subcommand_cli.config_overrides.raw_overrides);
 }
 
 fn print_completion(cmd: CompletionCommand) {
@@ -2179,6 +2189,39 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn root_interactive_accepts_server_request_sideband_fds() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--server-request-events-fd",
+            "6",
+            "--server-request-responses-fd",
+            "7",
+        ])
+        .expect("top-level sideband fd flags should parse");
+
+        assert_eq!(cli.interactive.server_request_events_fd, Some(6));
+        assert_eq!(cli.interactive.server_request_responses_fd, Some(7));
+    }
+
+    #[test]
+    fn resume_merges_server_request_sideband_fds() {
+        let interactive = finalize_resume_from_args(
+            [
+                "codex",
+                "resume",
+                "--server-request-events-fd",
+                "8",
+                "--server-request-responses-fd",
+                "9",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(interactive.server_request_events_fd, Some(8));
+        assert_eq!(interactive.server_request_responses_fd, Some(9));
     }
 
     #[test]

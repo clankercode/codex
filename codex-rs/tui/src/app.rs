@@ -59,6 +59,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::server_request_sideband::ServerRequestSideband;
 use crate::structured_input::StructuredInputRuntime;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
@@ -134,6 +135,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_terminal_detection::user_agent;
+use codex_turn_start_bridge_core::sideband::ServerRequestResolution;
+use codex_turn_start_bridge_core::sideband::SidebandResponseEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1048,6 +1051,7 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     structured_input: Option<StructuredInputRuntime>,
+    server_request_sideband: Option<ServerRequestSideband>,
 }
 
 #[derive(Default)]
@@ -2679,11 +2683,15 @@ impl App {
             return Ok(false);
         };
 
+        let request_id = resolution.request_id.clone();
         match app_server
             .resolve_server_request(resolution.request_id, resolution.result)
             .await
         {
             Ok(()) => {
+                if let Some(sideband) = self.server_request_sideband.as_mut() {
+                    sideband.remove_pending_request(&request_id);
+                }
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
                     self.note_thread_outbound_op(thread_id, op).await;
                     self.refresh_pending_thread_approvals().await;
@@ -2695,6 +2703,47 @@ impl App {
                     "Failed to resolve app-server request for thread {thread_id}: {err}"
                 ));
                 Ok(false)
+            }
+        }
+    }
+
+    async fn handle_server_request_sideband_event(
+        &mut self,
+        app_server: &AppServerSession,
+        event: SidebandResponseEvent,
+    ) {
+        let Some(sideband) = self.server_request_sideband.as_mut() else {
+            return;
+        };
+
+        match event {
+            SidebandResponseEvent::Response(response) => {
+                let Some((request_id, resolution)) = sideband.take_valid_response(response) else {
+                    return;
+                };
+                let result = match resolution {
+                    ServerRequestResolution::Resolve(response) => {
+                        app_server
+                            .resolve_server_request(request_id, response)
+                            .await
+                    }
+                    ServerRequestResolution::Reject(error) => {
+                        app_server.reject_server_request(request_id, error).await
+                    }
+                };
+                if let Err(err) = result {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to apply server-request sideband response: {err}"
+                    ));
+                }
+            }
+            SidebandResponseEvent::ParseError(message)
+            | SidebandResponseEvent::ReadError(message) => {
+                tracing::warn!("{message}");
+                sideband.close_response_reader(&message);
+            }
+            SidebandResponseEvent::Closed => {
+                sideband.close_response_reader("response channel closed");
             }
         }
     }
@@ -3856,6 +3905,7 @@ impl App {
         remote_app_server_auth_token: Option<String>,
         environment_manager: Arc<EnvironmentManager>,
         mut structured_input: Option<StructuredInputRuntime>,
+        server_request_sideband: Option<ServerRequestSideband>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -4106,6 +4156,7 @@ impl App {
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             structured_input,
+            server_request_sideband,
         };
         app.apply_structured_input_actions(&mut app_server, startup_structured_input_actions)
             .await?;
@@ -4233,6 +4284,25 @@ impl App {
                             }
                             None => {
                                 app.disable_structured_input();
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
+                    sideband_response_event = async {
+                        if let Some(sideband) = app.server_request_sideband.as_mut() {
+                            sideband.recv_response().await
+                        } else {
+                            None
+                        }
+                    }, if app.server_request_sideband.as_ref().is_some_and(ServerRequestSideband::has_response_reader) => {
+                        match sideband_response_event {
+                            Some(event) => {
+                                app.handle_server_request_sideband_event(&app_server, event).await;
+                            }
+                            None => {
+                                if let Some(sideband) = app.server_request_sideband.as_mut() {
+                                    sideband.close_response_reader("response channel closed");
+                                }
                             }
                         }
                         AppRunControl::Continue
@@ -9924,6 +9994,7 @@ guardian_approval = true
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             structured_input: None,
+            server_request_sideband: None,
         }
     }
 
@@ -9982,6 +10053,7 @@ guardian_approval = true
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
                 structured_input: None,
+                server_request_sideband: None,
             },
             rx,
             op_rx,

@@ -73,6 +73,22 @@ pub struct Cli {
     #[arg(long = "xml-input-fd", value_name = "FD")]
     pub xml_input_fd: Option<i32>,
 
+    /// Write mirrored app-server request events as JSONL to an inherited file descriptor.
+    #[arg(long = "server-request-events-fd", value_name = "FD")]
+    pub server_request_events_fd: Option<i32>,
+
+    /// Read JSONL responses for mirrored app-server request events from an inherited file descriptor.
+    #[arg(long = "server-request-responses-fd", value_name = "FD")]
+    pub server_request_responses_fd: Option<i32>,
+
+    /// Write unified sideband control events as JSONL to an inherited file descriptor.
+    #[arg(long = "control-events-fd", value_name = "FD")]
+    pub control_events_fd: Option<i32>,
+
+    /// Read JSONL responses for unified sideband control request events from an inherited file descriptor.
+    #[arg(long = "control-responses-fd", value_name = "FD")]
+    pub control_responses_fd: Option<i32>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

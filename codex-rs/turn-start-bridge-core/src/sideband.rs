@@ -33,20 +33,20 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ThreadResolvedPayload {
-    pub(crate) thread_id: String,
-    pub(crate) source: String,
+pub struct ThreadResolvedPayload {
+    pub thread_id: String,
+    pub source: String,
 }
 
 impl ThreadResolvedPayload {
-    pub(crate) fn started(thread_id: &str) -> Self {
+    pub fn started(thread_id: &str) -> Self {
         Self {
             thread_id: thread_id.to_string(),
             source: "started".to_string(),
         }
     }
 
-    pub(crate) fn resumed(thread_id: &str) -> Self {
+    pub fn resumed(thread_id: &str) -> Self {
         Self {
             thread_id: thread_id.to_string(),
             source: "resumed".to_string(),
@@ -229,7 +229,7 @@ fn sideband_unavailable_error(message: &str) -> JSONRPCErrorError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ManagedServerRequest {
+pub struct ManagedServerRequest {
     kind: ManagedServerRequestKind,
     request_id: RequestId,
     thread_id: Option<String>,
@@ -240,11 +240,11 @@ pub(crate) struct ManagedServerRequest {
 }
 
 impl ManagedServerRequest {
-    pub(crate) fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &'static str {
         self.kind.request_kind()
     }
 
-    pub(crate) fn request_id(&self) -> &RequestId {
+    pub fn request_id(&self) -> &RequestId {
         &self.request_id
     }
 
@@ -263,7 +263,7 @@ impl ManagedServerRequest {
         &self.raw_payload
     }
 
-    pub(crate) fn event(&self) -> ManagedServerRequestEvent<'_> {
+    pub fn event(&self) -> ManagedServerRequestEvent<'_> {
         ManagedServerRequestEvent {
             kind: self.kind.request_kind(),
             request_id: &self.request_id,
@@ -275,14 +275,14 @@ impl ManagedServerRequest {
         }
     }
 
-    pub(crate) fn parse_response(
+    pub fn parse_response(
         &self,
         response: SidebandResponseEnvelope,
     ) -> Result<ServerRequestResolution> {
         self.kind.parse_response(response)
     }
 
-    pub(crate) fn default_resolution_on_input_closed(&self) -> Result<ServerRequestResolution> {
+    pub fn default_resolution_on_input_closed(&self) -> Result<ServerRequestResolution> {
         self.kind.default_resolution_on_input_closed()
     }
 }
@@ -374,7 +374,7 @@ impl TryFrom<&ServerRequest> for ManagedServerRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct ManagedServerRequestEvent<'a> {
+pub struct ManagedServerRequestEvent<'a> {
     kind: &'static str,
     request_id: &'a RequestId,
     thread_id: Option<&'a str>,
@@ -394,14 +394,14 @@ struct ControlThreadResolvedEvent<'a> {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct SidebandResponseEnvelope {
-    pub(crate) kind: String,
-    pub(crate) request_id: RequestId,
-    pub(crate) response: Value,
+pub struct SidebandResponseEnvelope {
+    pub kind: String,
+    pub request_id: RequestId,
+    pub response: Value,
 }
 
 #[derive(Debug)]
-pub(crate) enum SidebandResponseEvent {
+pub enum SidebandResponseEvent {
     Response(SidebandResponseEnvelope),
     ParseError(String),
     ReadError(String),
@@ -409,7 +409,7 @@ pub(crate) enum SidebandResponseEvent {
 }
 
 #[derive(Debug)]
-pub(crate) enum ServerRequestResolution {
+pub enum ServerRequestResolution {
     Resolve(Value),
     Reject(JSONRPCErrorError),
 }
@@ -448,7 +448,7 @@ impl JsonLineSink {
     }
 }
 
-pub(crate) struct SidebandOutputs {
+pub struct SidebandOutputs {
     #[cfg(unix)]
     thread_id_sinks: Vec<JsonLineSink>,
     #[cfg(unix)]
@@ -459,7 +459,7 @@ pub(crate) struct SidebandOutputs {
 
 impl SidebandOutputs {
     #[cfg(unix)]
-    pub(crate) fn from_fds(
+    pub fn from_fds(
         thread_id_fd: Option<i32>,
         server_request_events_fd: Option<i32>,
         control_events_fd: Option<i32>,
@@ -494,7 +494,7 @@ impl SidebandOutputs {
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn from_fds(
+    pub fn from_fds(
         thread_id_fd: Option<i32>,
         server_request_events_fd: Option<i32>,
         control_events_fd: Option<i32>,
@@ -503,7 +503,7 @@ impl SidebandOutputs {
         Ok(Self {})
     }
 
-    pub(crate) fn has_request_event_sink(&self) -> bool {
+    pub fn has_request_event_sink(&self) -> bool {
         #[cfg(unix)]
         {
             !self.request_event_sinks.is_empty()
@@ -515,7 +515,7 @@ impl SidebandOutputs {
         }
     }
 
-    pub(crate) fn emit_thread_resolved(&self, payload: &ThreadResolvedPayload) -> Result<()> {
+    pub fn emit_thread_resolved(&self, payload: &ThreadResolvedPayload) -> Result<()> {
         #[cfg(unix)]
         {
             for sink in &self.thread_id_sinks {
@@ -534,7 +534,7 @@ impl SidebandOutputs {
         Ok(())
     }
 
-    pub(crate) fn emit_request(&self, request: &ManagedServerRequest) -> Result<()> {
+    pub fn emit_request(&self, request: &ManagedServerRequest) -> Result<()> {
         #[cfg(unix)]
         {
             let event = request.event();
@@ -563,9 +563,7 @@ fn validate_unique_fds(entries: &[(&str, Option<i32>)]) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(crate) fn spawn_response_reader(
-    fd: i32,
-) -> Result<mpsc::UnboundedReceiver<SidebandResponseEvent>> {
+pub fn spawn_response_reader(fd: i32) -> Result<mpsc::UnboundedReceiver<SidebandResponseEvent>> {
     if fd < 0 {
         anyhow::bail!("invalid fd value `{fd}`");
     }
@@ -613,9 +611,7 @@ pub(crate) fn spawn_response_reader(
 }
 
 #[cfg(not(unix))]
-pub(crate) fn spawn_response_reader(
-    _fd: i32,
-) -> Result<mpsc::UnboundedReceiver<SidebandResponseEvent>> {
+pub fn spawn_response_reader(_fd: i32) -> Result<mpsc::UnboundedReceiver<SidebandResponseEvent>> {
     anyhow::bail!("sideband FDs are only supported on Unix targets")
 }
 

@@ -171,6 +171,9 @@ impl App {
 
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
+                if let Some(sideband) = self.server_request_sideband.as_mut() {
+                    sideband.remove_pending_request(&notification.request_id);
+                }
                 if let Some(request) = self
                     .pending_app_server_requests
                     .resolve_notification(&notification.request_id)
@@ -252,6 +255,15 @@ impl App {
         app_server_client: &mut AppServerSession,
         request: ServerRequest,
     ) {
+        if let Some(sideband) = self.server_request_sideband.as_mut()
+            && let Err(err) = sideband.note_server_request(&request)
+        {
+            tracing::warn!("failed to emit server-request sideband event: {err}");
+            self.chat_widget.add_error_message(format!(
+                "Failed to emit server-request sideband event; local approval remains available: {err}"
+            ));
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)

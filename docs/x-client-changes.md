@@ -65,11 +65,19 @@ For fd lifecycle and ownership guidance when embedding these sidebands, see
 
 ```bash
 --xml-input-fd <fd>
+--server-request-events-fd <fd>
+--server-request-responses-fd <fd>
+--control-events-fd <fd>
+--control-responses-fd <fd>
 ```
 
-This is Unix-only in v1. The fullscreen TUI continues to read human keyboard
-input from its normal terminal stdin path; the inherited file descriptor named
-by `--xml-input-fd` is read as a sideband stream of XML fragments.
+These fd sidebands are Unix-only in v1. The fullscreen TUI continues to read
+human keyboard input from its normal terminal stdin path; the inherited file
+descriptor named by `--xml-input-fd` is read as a sideband stream of XML
+fragments. Server-request event fds mirror approval and elicitation requests
+while the normal TUI prompt remains visible. Responses on the response fd
+resolve the same app-server request and the normal resolved-request notification
+dismisses the TUI prompt.
 
 ## XML Stdin Format
 

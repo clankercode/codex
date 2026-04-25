@@ -3058,9 +3058,13 @@ dependencies = [
 name = "codex-turn-start-bridge-core"
 version = "0.122.0"
 dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
  "pretty_assertions",
  "quick-xml",
  "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
