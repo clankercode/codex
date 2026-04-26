@@ -44,6 +44,40 @@ impl TurnEnvironment {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TurnRuntimePermissions {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
+}
+
+impl TurnRuntimePermissions {
+    pub(super) fn from_session_configuration(config: &SessionConfiguration) -> Self {
+        Self {
+            approval_policy: config.approval_policy.value(),
+            approvals_reviewer: config.approvals_reviewer,
+            sandbox_policy: config.sandbox_policy.get().clone(),
+            file_system_sandbox_policy: config.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.network_sandbox_policy,
+            windows_sandbox_level: config.windows_sandbox_level,
+        }
+    }
+
+    pub(super) fn from_turn_context(context: &TurnContext) -> Self {
+        Self {
+            approval_policy: context.approval_policy.value(),
+            approvals_reviewer: context.approvals_reviewer,
+            sandbox_policy: context.sandbox_policy.get().clone(),
+            file_system_sandbox_policy: context.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: context.network_sandbox_policy,
+            windows_sandbox_level: context.windows_sandbox_level,
+        }
+    }
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -73,9 +107,11 @@ pub(crate) struct TurnContext {
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
+    runtime_permissions: tokio::sync::RwLock<TurnRuntimePermissions>,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -95,6 +131,14 @@ pub(crate) struct TurnContext {
     pub(crate) model_verification_emitted: AtomicBool,
 }
 impl TurnContext {
+    pub(crate) async fn runtime_permissions(&self) -> TurnRuntimePermissions {
+        self.runtime_permissions.read().await.clone()
+    }
+
+    pub(crate) async fn set_runtime_permissions(&self, permissions: TurnRuntimePermissions) {
+        *self.runtime_permissions.write().await = permissions;
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         PermissionProfile::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
@@ -483,9 +527,13 @@ impl Session {
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
+            approvals_reviewer: session_configuration.approvals_reviewer,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,
+            runtime_permissions: tokio::sync::RwLock::new(
+                TurnRuntimePermissions::from_session_configuration(session_configuration),
+            ),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),

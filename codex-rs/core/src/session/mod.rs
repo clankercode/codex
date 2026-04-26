@@ -208,6 +208,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::filter_connectors_for_input;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
+use self::turn_context::TurnRuntimePermissions;
 use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -1294,7 +1295,14 @@ impl Session {
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
         let base_instructions_for_rollout = updates.base_instructions.clone();
-        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+        let (
+            previous_cwd,
+            sandbox_policy_changed,
+            next_cwd,
+            codex_home,
+            session_source,
+            runtime_permissions,
+        ) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1310,6 +1318,7 @@ impl Session {
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+            let runtime_permissions = TurnRuntimePermissions::from_session_configuration(&updated);
             state.session_configuration = updated;
             (
                 previous_cwd,
@@ -1317,6 +1326,7 @@ impl Session {
                 next_cwd,
                 codex_home,
                 session_source,
+                runtime_permissions,
             )
         };
 
@@ -1330,12 +1340,39 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
                 .await;
         }
+        self.refresh_active_turn_runtime_permissions(runtime_permissions)
+            .await;
         if let Some(base_instructions) = base_instructions_for_rollout {
             self.persist_base_instructions_update(base_instructions)
                 .await;
         }
 
         Ok(())
+    }
+
+    async fn refresh_active_turn_runtime_permissions(
+        &self,
+        runtime_permissions: TurnRuntimePermissions,
+    ) {
+        let turn_contexts = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .map(|active_turn| {
+                    active_turn
+                        .tasks
+                        .values()
+                        .map(|task| Arc::clone(&task.turn_context))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        for turn_context in turn_contexts {
+            turn_context
+                .set_runtime_permissions(runtime_permissions.clone())
+                .await;
+        }
     }
 
     pub(crate) async fn validate_settings(

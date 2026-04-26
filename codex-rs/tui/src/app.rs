@@ -2621,6 +2621,10 @@ impl App {
                 app_server.reload_user_config().await?;
                 Ok(true)
             }
+            AppCommandView::RefreshMcpServers { .. } => {
+                app_server.refresh_mcp_servers().await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext {
                 cwd,
                 approval_policy,
@@ -6853,6 +6857,7 @@ mod tests {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::NetworkApprovalContext;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::protocol::RolloutItem;
@@ -11785,6 +11790,37 @@ guardian_approval = true
             .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
             .await
             .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
+    }
+
+    #[tokio::test]
+    async fn mcp_reload_is_submitted_via_app_server() {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(
+                app.chat_widget.config_ref(),
+                /*base_instructions*/ None,
+            )
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let op = AppCommand::refresh_mcp_servers(McpServerRefreshConfig {
+            mcp_servers: serde_json::json!({}),
+            mcp_oauth_credentials_store_mode: serde_json::json!(null),
+        });
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("mcp reload submission should not fail");
 
         assert_eq!(handled, true);
     }

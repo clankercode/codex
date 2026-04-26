@@ -788,15 +788,16 @@ impl UnifiedExecProcessManager {
             self,
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
+        let runtime_permissions = context.turn.runtime_permissions().await;
         let exec_approval_requirement = context
             .session
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                approval_policy: runtime_permissions.approval_policy,
+                sandbox_policy: &runtime_permissions.sandbox_policy,
+                file_system_sandbox_policy: &runtime_permissions.file_system_sandbox_policy,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -834,7 +835,7 @@ impl UnifiedExecProcessManager {
                 &req,
                 &tool_ctx,
                 &context.turn,
-                context.turn.approval_policy.value(),
+                runtime_permissions.approval_policy,
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))

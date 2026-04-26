@@ -127,9 +127,13 @@ pub(super) async fn spawn_review_thread(
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
+        approvals_reviewer: parent_turn_context.approvals_reviewer,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,
+        runtime_permissions: tokio::sync::RwLock::new(TurnRuntimePermissions::from_turn_context(
+            parent_turn_context,
+        )),
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),

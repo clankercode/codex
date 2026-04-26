@@ -6158,6 +6158,16 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .approval_policy
         .set(AskForApproval::OnFailure)
         .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .set_runtime_permissions(TurnRuntimePermissions {
+            approval_policy: AskForApproval::OnFailure,
+            approvals_reviewer: turn_context_raw.config.approvals_reviewer,
+            sandbox_policy: turn_context_raw.sandbox_policy.get().clone(),
+            file_system_sandbox_policy: turn_context_raw.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: turn_context_raw.network_sandbox_policy,
+            windows_sandbox_level: turn_context_raw.windows_sandbox_level,
+        })
+        .await;
     let session = Arc::new(session);
     let mut turn_context = Arc::new(turn_context_raw);
 
@@ -6271,6 +6281,16 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .approval_policy
         .set(AskForApproval::OnFailure)
         .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .set_runtime_permissions(TurnRuntimePermissions {
+            approval_policy: AskForApproval::OnFailure,
+            approvals_reviewer: turn_context_raw.config.approvals_reviewer,
+            sandbox_policy: turn_context_raw.sandbox_policy.get().clone(),
+            file_system_sandbox_policy: turn_context_raw.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: turn_context_raw.network_sandbox_policy,
+            windows_sandbox_level: turn_context_raw.windows_sandbox_level,
+        })
+        .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

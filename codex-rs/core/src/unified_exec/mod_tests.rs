@@ -6,9 +6,16 @@ use crate::sandboxing::ExecRequest;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnRuntimePermissions;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
@@ -167,6 +174,54 @@ async fn exec_command_with_tty(
         original_token_count: Some(approx_token_count(&text)),
         hook_command: Some(cmd.to_string()),
     })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_uses_runtime_permissions_after_permission_update() -> anyhow::Result<()> {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
+    turn.sandbox_policy
+        .set(SandboxPolicy::new_read_only_policy())
+        .expect("test setup should allow updating sandbox policy");
+    turn.file_system_sandbox_policy = FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.network_sandbox_policy = NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    turn.set_runtime_permissions(TurnRuntimePermissions {
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: FileSystemSandboxPolicy::unrestricted(),
+        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
+        windows_sandbox_level: turn.windows_sandbox_level,
+    })
+    .await;
+
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let request = ExecCommandRequest {
+        command: vec!["rm".into(), "-rf".into(), "--help".into()],
+        process_id,
+        yield_time_ms: 1000,
+        max_output_tokens: None,
+        workdir: None,
+        network: None,
+        tty: false,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    };
+    let context = UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".into());
+
+    let output = manager.exec_command(request, &context).await?;
+
+    assert_eq!(Some(0), output.exit_code);
+    Ok(())
 }
 
 #[derive(Debug)]

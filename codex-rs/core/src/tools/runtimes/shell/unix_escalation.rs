@@ -203,10 +203,6 @@ pub(super) async fn try_run_zsh_fork(
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: ctx.turn.approval_policy.value(),
-        sandbox_policy: command_executor.sandbox_policy.clone(),
-        file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: command_executor.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
@@ -275,10 +271,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
-        approval_policy: ctx.turn.approval_policy.value(),
-        sandbox_policy: exec_request.sandbox_policy.clone(),
-        file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions: approval_sandbox_permissions(
             req.sandbox_permissions,
@@ -310,10 +302,6 @@ struct CoreShellActionProvider {
     turn: Arc<crate::session::turn_context::TurnContext>,
     call_id: String,
     tool_name: GuardianCommandSource,
-    approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
-    file_system_sandbox_policy: FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
@@ -503,14 +491,14 @@ impl CoreShellActionProvider {
         prompt_permissions: Option<AdditionalPermissionProfile>,
         escalation_execution: EscalationExecution,
         decision_source: DecisionSource,
+        approval_policy: AskForApproval,
     ) -> anyhow::Result<EscalationDecision> {
         let action = match decision {
             Decision::Forbidden => {
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
-                if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
-                    .is_some()
+                if execve_prompt_is_rejected_by_policy(approval_policy, &decision_source).is_some()
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
@@ -597,6 +585,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             "Determining escalation action for command {program:?} with args {argv:?} in {workdir:?}"
         );
 
+        let runtime_permissions = self.turn.runtime_permissions().await;
         let evaluation = {
             let policy = self.policy.read().await;
             evaluate_intercepted_exec_policy(
@@ -604,9 +593,9 @@ impl EscalationPolicy for CoreShellActionProvider {
                 program,
                 argv,
                 InterceptedExecPolicyContext {
-                    approval_policy: self.approval_policy,
-                    sandbox_policy: &self.sandbox_policy,
-                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    approval_policy: runtime_permissions.approval_policy,
+                    sandbox_policy: &runtime_permissions.sandbox_policy,
+                    file_system_sandbox_policy: &runtime_permissions.file_system_sandbox_policy,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
@@ -629,9 +618,9 @@ impl EscalationPolicy for CoreShellActionProvider {
             DecisionSource::PrefixRule => EscalationExecution::Unsandboxed,
             DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
                 self.sandbox_permissions,
-                &self.sandbox_policy,
-                &self.file_system_sandbox_policy,
-                self.network_sandbox_policy,
+                &runtime_permissions.sandbox_policy,
+                &runtime_permissions.file_system_sandbox_policy,
+                runtime_permissions.network_sandbox_policy,
                 self.prompt_permissions.as_ref(),
             ),
         };
@@ -644,6 +633,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             self.prompt_permissions.clone(),
             escalation_execution,
             decision_source,
+            runtime_permissions.approval_policy,
         )
         .await
     }

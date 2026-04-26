@@ -9,6 +9,7 @@ use super::map_exec_result;
 use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnRuntimePermissions;
 use anyhow::Context;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
@@ -16,6 +17,7 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -30,14 +32,17 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
+use codex_shell_escalation::EscalationDecision;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
+use codex_shell_escalation::EscalationPolicy;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -123,6 +128,60 @@ fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissio
         ),
         SandboxPermissions::RequireEscalated,
     );
+}
+
+#[tokio::test]
+async fn execve_intercept_uses_runtime_permissions_after_permission_update() {
+    let (session, mut turn) = make_session_and_context().await;
+    let stale_approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    turn.approval_policy
+        .set(stale_approval_policy)
+        .expect("test setup should allow updating approval policy");
+    turn.sandbox_policy
+        .set(SandboxPolicy::new_read_only_policy())
+        .expect("test setup should allow updating sandbox policy");
+    turn.file_system_sandbox_policy = read_only_file_system_sandbox_policy();
+    turn.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    turn.set_runtime_permissions(TurnRuntimePermissions {
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: FileSystemSandboxPolicy::unrestricted(),
+        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
+        windows_sandbox_level: turn.windows_sandbox_level,
+    })
+    .await;
+
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(PolicyParser::new().build())),
+        session,
+        turn: Arc::clone(&turn),
+        call_id: "call".to_string(),
+        tool_name: codex_protocol::protocol::GuardianCommandSource::Shell,
+        sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        approval_sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::unlimited(),
+    };
+
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "rm"]))
+        .expect("absolute program path");
+    let argv = ["rm".to_string(), "-rf".to_string(), "--help".to_string()];
+    let action = provider
+        .determine_action(&program, &argv, &turn.cwd)
+        .await
+        .expect("determine action");
+
+    assert_eq!(action, EscalationDecision::Run);
 }
 
 #[test]
