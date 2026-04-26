@@ -481,6 +481,7 @@ fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
         }
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
+            read_only_access: _,
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
