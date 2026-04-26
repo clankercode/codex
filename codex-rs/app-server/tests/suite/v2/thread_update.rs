@@ -50,6 +50,7 @@ async fn thread_update_changes_reasoning_effort_for_future_turns() -> Result<()>
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: Some(Some(ReasoningEffort::High)),

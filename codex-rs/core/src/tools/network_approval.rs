@@ -422,7 +422,7 @@ impl NetworkApprovalService {
             }
         }
         let use_guardian = runtime_permissions.approval_policy == AskForApproval::OnRequest
-            && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent;
+            && runtime_permissions.approvals_reviewer == ApprovalsReviewer::AutoReview;
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(

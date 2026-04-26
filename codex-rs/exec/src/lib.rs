@@ -748,7 +748,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
-                        prefixed_messages: None,
+                        prefixed_items: None,
                         responsesapi_client_metadata: None,
                         environments: None,
                         cwd: Some(default_cwd),
@@ -763,8 +763,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         personality: None,
                         output_schema,
                         collaboration_mode: None,
-                        base_instructions: None,
-                        developer_instructions: None,
                     },
                 },
                 "turn/start",

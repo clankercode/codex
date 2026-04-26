@@ -43,32 +43,6 @@ fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) 
     }
 }
 
-fn set_mini_selection_test_catalog(chat: &mut ChatWidget, models: &[&str]) {
-    let models = ModelsResponse {
-        models: models
-            .iter()
-            .enumerate()
-            .map(|(idx, model)| {
-                test_model_info(model, idx as i32, /*supports_fast_mode*/ false)
-            })
-            .collect(),
-    }
-    .models
-    .into_iter()
-    .map(Into::into)
-    .collect();
-
-    chat.model_catalog = Arc::new(ModelCatalog::new(
-        models,
-        CollaborationModesConfig {
-            default_mode_request_user_input: chat
-                .config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
-    ));
-}
-
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -628,50 +602,6 @@ async fn queued_unknown_slash_reports_error_when_dequeued() {
         "expected delayed slash error, got {rendered:?}"
     );
     assert!(chat.queued_user_messages.is_empty());
-}
-
-#[tokio::test]
-async fn slash_compact_with_mini_prefers_current_model_mini() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4-mini", "gpt-5.5", "gpt-5.5-mini"]);
-
-    chat.dispatch_command(SlashCommand::CompactWithMini);
-
-    assert!(chat.bottom_pane.is_task_running());
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.5-mini"
-    );
-    assert_eq!(chat.current_model(), "gpt-5.5");
-}
-
-#[tokio::test]
-async fn slash_compact_with_mini_falls_back_to_top_alphanumeric_mini() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    set_mini_selection_test_catalog(
-        &mut chat,
-        &["gpt-5.4-mini", "gpt-5.5", "gpt-5.3-codex-mini"],
-    );
-
-    chat.dispatch_command(SlashCommand::CompactWithMini);
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.4-mini"
-    );
-}
-
-#[tokio::test]
-async fn slash_compact_with_mini_reports_missing_mini_model() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4", "gpt-5.5"]);
-
-    chat.dispatch_command(SlashCommand::CompactWithMini);
-
-    assert!(!chat.bottom_pane.is_task_running());
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1);
-    assert!(lines_to_single_string(&cells[0]).contains("No mini model"));
 }
 
 #[tokio::test]
@@ -1239,230 +1169,6 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
         "expected usage message, got: {rendered:?}"
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/fast maybe");
-}
-
-#[tokio::test]
-async fn idle_time_usage_error_slash_command_is_available_from_local_recall() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    submit_composer_text(&mut chat, "/idle-time maybe");
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Usage: /idle-time [on|off|status]"),
-        "expected usage message, got: {rendered:?}"
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time maybe");
-}
-
-#[tokio::test]
-async fn effort_usage_error_slash_command_is_available_from_local_recall() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/effort maybe");
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Usage: /effort [off|low|medium|high|xhigh|status]"),
-        "expected usage message, got: {rendered:?}"
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/effort maybe");
-}
-
-#[tokio::test]
-async fn idle_time_command_is_available_while_task_running() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-
-    submit_composer_text(&mut chat, "/idle-time off");
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Idle timing injection disabled."),
-        "expected disable message, got: {rendered:?}"
-    );
-    assert!(!chat.idle_timing_injection_enabled());
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time off");
-}
-
-#[tokio::test]
-async fn effort_command_is_available_while_task_running() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-
-    submit_composer_text(&mut chat, "/effort off");
-
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::None))
-        )),
-        "expected reasoning effort update event; events: {events:?}"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                effort: Some(Some(ReasoningEffortConfig::None)),
-                ..
-            })
-        )),
-        "expected live effort override op; events: {events:?}"
-    );
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::None)
-    );
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/effort off");
-}
-
-#[tokio::test]
-async fn permissions_default_command_is_available_while_task_running() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-
-    submit_composer_text(&mut chat, "/permissions default");
-
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
-                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite { .. }),
-                ..
-            })
-        )),
-        "expected live default permissions override; events: {events:?}"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
-        )),
-        "expected permissions reviewer update; events: {events:?}"
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/permissions default"
-    );
-}
-
-#[tokio::test]
-async fn approvals_default_alias_matches_permissions_command() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-
-    submit_composer_text(&mut chat, "/approvals default");
-
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
-                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite { .. }),
-                ..
-            })
-        )),
-        "expected live default permissions override; events: {events:?}"
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/approvals default"
-    );
-}
-
-#[tokio::test]
-async fn permissions_guardian_command_enables_feature_when_needed() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-
-    submit_composer_text(&mut chat, "/permissions guardian");
-
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateFeatureFlags { updates }
-                if updates == &vec![(Feature::GuardianApproval, true)]
-        )),
-        "expected guardian feature enable event; events: {events:?}"
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/permissions guardian"
-    );
-}
-
-#[tokio::test]
-async fn permissions_all_command_opens_full_access_confirmation_while_task_running() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.bottom_pane.set_task_running(/*running*/ true);
-    chat.config.notices.hide_full_access_warning = None;
-
-    submit_composer_text(&mut chat, "/permissions all");
-
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::OpenFullAccessConfirmation {
-                preset,
-                return_to_permissions,
-            } if preset.id == "full-access"
-                && *return_to_permissions != cfg!(target_os = "windows")
-        )),
-        "expected full access confirmation prompt; events: {events:?}"
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/permissions all");
-}
-
-#[tokio::test]
-async fn permissions_usage_error_slash_command_is_available_from_local_recall() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    submit_composer_text(&mut chat, "/permissions maybe");
-
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Usage: /permissions [default|guardian|all]"),
-        "expected usage message, got: {rendered:?}"
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/permissions maybe"
-    );
 }
 
 #[tokio::test]
@@ -2079,22 +1785,6 @@ async fn slash_mcp_invalid_args_show_usage() {
 }
 
 #[tokio::test]
-async fn slash_mcp_reload_requests_core_refresh() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.dispatch_command(SlashCommand::McpReload);
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::RefreshMcpServers { config }))
-            if config.mcp_servers.is_object()
-    );
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1);
-    assert!(lines_to_single_string(&cells[0]).contains("reload requested"));
-}
-
-#[tokio::test]
 async fn slash_memories_opens_memory_menu() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
@@ -2145,7 +1835,6 @@ async fn slash_resume_with_arg_requests_named_session() {
         Vec::new(),
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    assert!(chat.bottom_pane.composer_text().is_empty());
 
     assert_matches!(
         rx.try_recv(),
@@ -2322,37 +2011,6 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
 }
 
 #[tokio::test]
-async fn effort_slash_command_updates_local_reasoning_effort() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    chat.dispatch_command_with_args(SlashCommand::Effort, "high".to_string(), Vec::new());
-
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
-        )),
-        "expected reasoning effort update event; events: {events:?}"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                effort: Some(Some(ReasoningEffortConfig::High)),
-                ..
-            })
-        )),
-        "expected live effort override op; events: {events:?}"
-    );
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::High)
-    );
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-}
-
-#[tokio::test]
 async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2468,28 +2126,6 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
             ..
         } => {}
         other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn user_turn_carries_effort_after_effort_command() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
-
-    chat.dispatch_command_with_args(SlashCommand::Effort, "xhigh".to_string(), Vec::new());
-    let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            effort: Some(ReasoningEffortConfig::XHigh),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn with xhigh effort, got {other:?}"),
     }
 }
 

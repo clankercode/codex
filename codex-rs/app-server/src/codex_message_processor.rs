@@ -164,8 +164,6 @@ use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
-use codex_app_server_protocol::ThreadInjectMessagesParams;
-use codex_app_server_protocol::ThreadInjectMessagesResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -212,6 +210,8 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ThreadUpdateParams;
+use codex_app_server_protocol::ThreadUpdateResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -239,7 +239,6 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
-use codex_core::SessionSettingsUpdate;
 use codex_core::StartThreadWithToolsOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -331,7 +330,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
@@ -1095,8 +1093,8 @@ impl CodexMessageProcessor {
                 self.thread_inject_items(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ThreadInjectMessages { request_id, params } => {
-                self.thread_inject_messages(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadUpdate { request_id, params } => {
+                self.thread_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
@@ -7122,7 +7120,7 @@ impl CodexMessageProcessor {
         let TurnStartParams {
             thread_id: _,
             input,
-            prefixed_messages,
+            prefixed_items,
             responsesapi_client_metadata,
             environments,
             cwd,
@@ -7135,8 +7133,6 @@ impl CodexMessageProcessor {
             effort,
             summary,
             personality,
-            base_instructions,
-            developer_instructions,
             output_schema,
             collaboration_mode,
         } = params;
@@ -7170,11 +7166,23 @@ impl CodexMessageProcessor {
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
-        let prefixed_items = prefixed_messages
+        let prefixed_items = prefixed_items
             .unwrap_or_default()
             .into_iter()
-            .map(typed_message_to_response_item)
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(index, value)| {
+                serde_json::from_value::<ResponseItem>(value).map_err(|err| {
+                    format!("prefixedItems[{index}] is not a valid response item: {err}")
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>();
+        let prefixed_items = match prefixed_items {
+            Ok(items) => items,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
 
         let has_any_overrides = cwd.is_some()
             || approval_policy.is_some()
@@ -7232,16 +7240,6 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
-        }
-
-        if base_instructions.is_some() || developer_instructions.is_some() {
-            let _ = thread
-                .update_settings(SessionSettingsUpdate {
-                    base_instructions,
-                    developer_instructions,
-                    ..Default::default()
-                })
-                .await;
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
@@ -7394,11 +7392,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_inject_messages(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ThreadInjectMessagesParams,
-    ) {
+    async fn thread_update(&self, request_id: ConnectionRequestId, params: ThreadUpdateParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(value) => value,
             Err(error) => {
@@ -7407,50 +7401,57 @@ impl CodexMessageProcessor {
             }
         };
 
-        let items = params
-            .messages
-            .into_iter()
-            .map(|message| {
-                let (role, content) = match message.role {
-                    codex_app_server_protocol::InjectedMessageRole::Assistant => (
-                        "assistant".to_string(),
-                        vec![ContentItem::OutputText { text: message.text }],
-                    ),
-                    codex_app_server_protocol::InjectedMessageRole::Developer => (
-                        "developer".to_string(),
-                        vec![ContentItem::InputText { text: message.text }],
-                    ),
-                    codex_app_server_protocol::InjectedMessageRole::User => (
-                        "user".to_string(),
-                        vec![ContentItem::InputText { text: message.text }],
-                    ),
-                };
+        if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
-                ResponseItem::Message {
-                    id: None,
-                    role,
-                    content,
-                    end_turn: None,
-                    phase: None,
-                }
-            })
-            .collect::<Vec<_>>();
+        if params.base_instructions.is_some() || params.developer_instructions.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`baseInstructions` and `developerInstructions` are not supported by thread/update"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
 
-        match thread.inject_response_items(items).await {
-            Ok(()) => {
+        let turn_id = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::OverrideTurnContext {
+                    cwd: params.cwd,
+                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                    approvals_reviewer: params
+                        .approvals_reviewer
+                        .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+                    sandbox_policy: params.sandbox_policy.map(|policy| policy.to_core()),
+                    permission_profile: params.permission_profile.map(Into::into),
+                    windows_sandbox_level: params.windows_sandbox_level,
+                    model: params.model,
+                    effort: params.effort,
+                    summary: params.summary,
+                    service_tier: params.service_tier,
+                    collaboration_mode: params.collaboration_mode,
+                    personality: params.personality,
+                },
+            )
+            .await;
+
+        match turn_id {
+            Ok(_) => {
                 self.outgoing
-                    .send_response(request_id, ThreadInjectMessagesResponse {})
+                    .send_response(request_id, ThreadUpdateResponse {})
                     .await;
             }
-            Err(CodexErr::InvalidRequest(message)) => {
-                self.send_invalid_request_error(request_id, message).await;
-            }
             Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to inject typed messages: {err}"),
-                )
-                .await;
+                self.send_internal_error(request_id, format!("failed to update thread: {err}"))
+                    .await;
             }
         }
     }

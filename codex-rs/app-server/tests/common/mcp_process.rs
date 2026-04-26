@@ -66,9 +66,7 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
-use codex_app_server_protocol::ThreadImportTranscriptParams;
 use codex_app_server_protocol::ThreadInjectItemsParams;
-use codex_app_server_protocol::ThreadInjectMessagesParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
@@ -382,15 +380,6 @@ impl McpProcess {
         self.send_request("thread/fork", params).await
     }
 
-    /// Send a `thread/import_transcript` JSON-RPC request.
-    pub async fn send_thread_import_transcript_request(
-        &mut self,
-        params: ThreadImportTranscriptParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/import_transcript", params).await
-    }
-
     /// Send a `thread/archive` JSON-RPC request.
     pub async fn send_thread_archive_request(
         &mut self,
@@ -692,15 +681,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/inject_items", params).await
-    }
-
-    /// Send a `thread/inject_messages` JSON-RPC request (v2).
-    pub async fn send_thread_inject_messages_request(
-        &mut self,
-        params: ThreadInjectMessagesParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/inject_messages", params).await
     }
 
     /// Send a `command/exec` JSON-RPC request (v2).

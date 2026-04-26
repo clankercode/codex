@@ -449,10 +449,8 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
-        personality: chat.config.personality,
         task_running: false,
         agent_turn_running: false,
-        idle_timing_state: IdleTimingState::default(),
     }));
 
     assert_eq!(

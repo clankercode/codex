@@ -347,24 +347,15 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
-    pub(crate) async fn start_thread(
-        &mut self,
-        config: &Config,
-        base_instructions: Option<String>,
-    ) -> Result<AppServerStartedThread> {
-        self.start_thread_with_session_start_source(
-            config,
-            /*session_start_source*/ None,
-            base_instructions,
-        )
-        .await
+    pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
+        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
+            .await
     }
 
     pub(crate) async fn start_thread_with_session_start_source(
         &mut self,
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
-        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
@@ -376,7 +367,6 @@ impl AppServerSession {
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
-                    base_instructions,
                 ),
             })
             .await
@@ -388,7 +378,6 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
-        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
@@ -400,7 +389,6 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
-                    base_instructions,
                 ),
             })
             .await
@@ -417,7 +405,6 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
-        base_instructions: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
@@ -429,7 +416,6 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
-                    base_instructions,
                 ),
             })
             .await
@@ -445,8 +431,8 @@ impl AppServerSession {
     fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
-            AppServerClient::Stdio(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
+            AppServerClient::Stdio(_) => ThreadParamsMode::Embedded,
         }
     }
 
@@ -550,7 +536,6 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         items: Vec<codex_protocol::user_input::UserInput>,
-        prefixed_messages: Option<Vec<codex_app_server_protocol::InjectedMessage>>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
@@ -576,7 +561,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
-                    prefixed_messages,
+                    prefixed_items: None,
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
@@ -591,8 +576,6 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
-                    base_instructions: None,
-                    developer_instructions: None,
                 },
             })
             .await
@@ -621,49 +604,6 @@ impl AppServerSession {
 
     pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
         self.turn_interrupt(thread_id, String::new()).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn thread_update(
-        &mut self,
-        thread_id: ThreadId,
-        cwd: Option<PathBuf>,
-        approval_policy: Option<AskForApproval>,
-        approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
-        sandbox_policy: Option<SandboxPolicy>,
-        windows_sandbox_level: Option<codex_protocol::config_types::WindowsSandboxLevel>,
-        model: Option<String>,
-        effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
-        summary: Option<codex_protocol::config_types::ReasoningSummary>,
-        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
-        collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
-        personality: Option<codex_protocol::config_types::Personality>,
-    ) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: ThreadUpdateResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadUpdate {
-                request_id,
-                params: ThreadUpdateParams {
-                    thread_id: thread_id.to_string(),
-                    cwd,
-                    approval_policy: approval_policy.map(Into::into),
-                    approvals_reviewer: approvals_reviewer.map(Into::into),
-                    sandbox_policy: sandbox_policy.map(Into::into),
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                    base_instructions: None,
-                    developer_instructions: None,
-                },
-            })
-            .await
-            .wrap_err("thread/update failed in TUI")?;
-        Ok(())
     }
 
     pub(crate) async fn turn_steer(
@@ -726,6 +666,51 @@ impl AppServerSession {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn thread_update(
+        &mut self,
+        thread_id: ThreadId,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+        sandbox_policy: Option<SandboxPolicy>,
+        permission_profile: Option<PermissionProfile>,
+        windows_sandbox_level: Option<codex_protocol::config_types::WindowsSandboxLevel>,
+        model: Option<String>,
+        effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
+        summary: Option<codex_protocol::config_types::ReasoningSummary>,
+        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+        collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
+        personality: Option<codex_protocol::config_types::Personality>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadUpdateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUpdate {
+                request_id,
+                params: ThreadUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    cwd,
+                    approval_policy: approval_policy.map(Into::into),
+                    approvals_reviewer: approvals_reviewer.map(Into::into),
+                    sandbox_policy: sandbox_policy.map(Into::into),
+                    permission_profile: permission_profile.map(Into::into),
+                    windows_sandbox_level,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode,
+                    personality,
+                    base_instructions: None,
+                    developer_instructions: None,
+                },
+            })
+            .await
+            .wrap_err("thread/update failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn memory_reset(&mut self) -> Result<()> {
         let request_id = self.next_request_id();
         let _: MemoryResetResponse = self
@@ -736,6 +721,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("memory/reset failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_mcp_servers(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: McpServerRefreshResponse = self
+            .client
+            .request_typed(ClientRequest::McpServerRefresh {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("mcpServer/refresh failed in TUI")?;
         Ok(())
     }
 
@@ -958,19 +956,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("config/batchWrite failed while reloading user config in TUI")?;
-        Ok(())
-    }
-
-    pub(crate) async fn refresh_mcp_servers(&mut self) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: McpServerRefreshResponse = self
-            .client
-            .request_typed(ClientRequest::McpServerRefresh {
-                request_id,
-                params: None,
-            })
-            .await
-            .wrap_err("config/mcpServer/reload failed in TUI")?;
         Ok(())
     }
 
@@ -1217,7 +1202,6 @@ fn thread_start_params_from_config(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
-    base_instructions: Option<String>,
 ) -> ThreadStartParams {
     let permission_profile = permission_profile_override_from_config(config, thread_params_mode);
     let sandbox = permission_profile
@@ -1235,7 +1219,6 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         session_start_source,
-        base_instructions,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
@@ -1246,7 +1229,6 @@ fn thread_resume_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
-    base_instructions: Option<String>,
 ) -> ThreadResumeParams {
     let permission_profile = permission_profile_override_from_config(&config, thread_params_mode);
     let sandbox = permission_profile
@@ -1263,7 +1245,6 @@ fn thread_resume_params_from_config(
         sandbox,
         permission_profile,
         config: config_request_overrides_from_config(&config),
-        base_instructions,
         persist_extended_history: true,
         ..ThreadResumeParams::default()
     }
@@ -1274,7 +1255,6 @@ fn thread_fork_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
-    base_instructions: Option<String>,
 ) -> ThreadForkParams {
     let permission_profile = permission_profile_override_from_config(&config, thread_params_mode);
     let sandbox = permission_profile
@@ -1294,7 +1274,6 @@ fn thread_fork_params_from_config(
         base_instructions: config.base_instructions.clone(),
         developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
-        base_instructions,
         persist_extended_history: true,
         ..ThreadForkParams::default()
     }
@@ -1549,7 +1528,6 @@ fn app_server_credits_snapshot_to_core(
 mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
-    use crate::version::CODEX_CLI_VERSION;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
@@ -1576,7 +1554,6 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             /*session_start_source*/ None,
-            /*base_instructions*/ None,
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
@@ -1598,44 +1575,9 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             Some(ThreadStartSource::Clear),
-            /*base_instructions*/ None,
         );
 
         assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
-    }
-
-    #[tokio::test]
-    async fn thread_lifecycle_params_forward_base_instructions() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir).await;
-        let thread_id = ThreadId::new();
-        let base_instructions = Some("be terse".to_string());
-
-        let start = thread_start_params_from_config(
-            &config,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            /*session_start_source*/ None,
-            base_instructions.clone(),
-        );
-        let resume = thread_resume_params_from_config(
-            config.clone(),
-            thread_id,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            base_instructions.clone(),
-        );
-        let fork = thread_fork_params_from_config(
-            config,
-            thread_id,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            base_instructions.clone(),
-        );
-
-        assert_eq!(start.base_instructions, base_instructions);
-        assert_eq!(resume.base_instructions, base_instructions);
-        assert_eq!(fork.base_instructions, base_instructions);
     }
 
     #[tokio::test]
@@ -1651,21 +1593,18 @@ mod tests {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             /*session_start_source*/ None,
-            /*base_instructions*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
-            /*base_instructions*/ None,
         );
         let fork = thread_fork_params_from_config(
             config,
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
-            /*base_instructions*/ None,
         );
 
         assert_eq!(start.cwd, None);
@@ -1696,21 +1635,18 @@ mod tests {
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
             /*session_start_source*/ None,
-            /*base_instructions*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
-            /*base_instructions*/ None,
         );
         let fork = thread_fork_params_from_config(
             config,
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
-            /*base_instructions*/ None,
         );
 
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
@@ -1816,7 +1752,7 @@ mod tests {
                 status: ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
-                cli_version: CODEX_CLI_VERSION.to_string(),
+                cli_version: "0.0.0".to_string(),
                 source: codex_protocol::protocol::SessionSource::Cli.into(),
                 agent_nickname: None,
                 agent_role: None,

@@ -140,6 +140,7 @@ async fn override_turn_context_updates_reasoning_effort_during_active_turn() -> 
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: "gpt-5.1".to_string(),
             effort: None,
             summary: None,
@@ -147,6 +148,7 @@ async fn override_turn_context_updates_reasoning_effort_during_active_turn() -> 
             collaboration_mode: None,
             personality: None,
             final_output_json_schema: None,
+            environments: None,
         })
         .await?;
 
@@ -164,6 +166,7 @@ async fn override_turn_context_updates_reasoning_effort_during_active_turn() -> 
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: Some(Some(ReasoningEffort::High)),

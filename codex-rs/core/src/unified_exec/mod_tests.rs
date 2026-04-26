@@ -3,11 +3,11 @@ use super::*;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnRuntimePermissions;
-use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
@@ -204,6 +204,7 @@ async fn exec_command_uses_runtime_permissions_after_permission_update() -> anyh
     let process_id = manager.allocate_process_id().await;
     let request = ExecCommandRequest {
         command: vec!["rm".into(), "-rf".into(), "--help".into()],
+        hook_command: "rm -rf --help".into(),
         process_id,
         yield_time_ms: 1000,
         max_output_tokens: None,

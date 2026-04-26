@@ -754,7 +754,10 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(rendered_lines).join("\n").replace(
+        &format!("(v{})", crate::version::CODEX_CLI_VERSION),
+        "(v0.0.0)",
+    );
     assert_snapshot!(sanitized);
 }
 

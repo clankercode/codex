@@ -674,7 +674,43 @@ impl App {
                 self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
-            AppCommandView::OverrideTurnContext { .. } => Ok(true),
+            AppCommandView::RefreshMcpServers => {
+                app_server.refresh_mcp_servers().await?;
+                Ok(true)
+            }
+            AppCommandView::OverrideTurnContext {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            } => {
+                app_server
+                    .thread_update(
+                        thread_id,
+                        cwd.clone(),
+                        *approval_policy,
+                        *approvals_reviewer,
+                        sandbox_policy.clone(),
+                        permission_profile.clone(),
+                        *windows_sandbox_level,
+                        model.clone(),
+                        *effort,
+                        *summary,
+                        *service_tier,
+                        collaboration_mode.clone(),
+                        *personality,
+                    )
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::Other(Op::ApproveGuardianDeniedAction { event }) => {
                 app_server
                     .thread_approve_guardian_denied_action(thread_id, event)

@@ -2,6 +2,7 @@ use super::*;
 use crate::config::ConfigBuilder;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
+use crate::session::turn_context::TurnRuntimePermissions;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
 use codex_config::CONFIG_TOML_FILE;
@@ -76,6 +77,17 @@ fn prompt_options(
     McpToolApprovalPromptOptions {
         allow_session_remember,
         allow_persistent_approval,
+    }
+}
+
+fn runtime_permissions_for_context(context: &TurnContext) -> TurnRuntimePermissions {
+    TurnRuntimePermissions {
+        approval_policy: context.approval_policy.value(),
+        approvals_reviewer: context.config.approvals_reviewer,
+        sandbox_policy: context.sandbox_policy.get().clone(),
+        file_system_sandbox_policy: context.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: context.network_sandbox_policy,
+        windows_sandbox_level: context.windows_sandbox_level,
     }
 }
 
@@ -1536,6 +1548,9 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );
+    turn_context
+        .set_runtime_permissions(runtime_permissions_for_context(&turn_context))
+        .await;
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1813,6 +1828,9 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );
+    turn_context
+        .set_runtime_permissions(runtime_permissions_for_context(&turn_context))
+        .await;
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -2276,6 +2294,9 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );
+    turn_context
+        .set_runtime_permissions(runtime_permissions_for_context(&turn_context))
+        .await;
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

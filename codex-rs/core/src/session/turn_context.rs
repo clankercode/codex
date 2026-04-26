@@ -69,7 +69,7 @@ impl TurnRuntimePermissions {
     pub(super) fn from_turn_context(context: &TurnContext) -> Self {
         Self {
             approval_policy: context.approval_policy.value(),
-            approvals_reviewer: context.approvals_reviewer,
+            approvals_reviewer: context.config.approvals_reviewer,
             sandbox_policy: context.sandbox_policy.get().clone(),
             file_system_sandbox_policy: context.file_system_sandbox_policy.clone(),
             network_sandbox_policy: context.network_sandbox_policy,
@@ -101,17 +101,17 @@ pub(crate) struct TurnContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) base_instructions: String,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
-    pub(crate) approvals_reviewer: ApprovalsReviewer,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
-    runtime_permissions: tokio::sync::RwLock<TurnRuntimePermissions>,
+    pub(crate) runtime_permissions: tokio::sync::RwLock<TurnRuntimePermissions>,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -137,6 +137,17 @@ impl TurnContext {
 
     pub(crate) async fn set_runtime_permissions(&self, permissions: TurnRuntimePermissions) {
         *self.runtime_permissions.write().await = permissions;
+    }
+
+    pub(crate) fn base_instructions(&self) -> BaseInstructions {
+        BaseInstructions {
+            text: self.base_instructions.clone(),
+        }
+    }
+
+    pub(crate) async fn runtime_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.reasoning_effort
+            .or(self.model_info.default_reasoning_level)
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -251,6 +262,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
+            base_instructions: self.base_instructions.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -260,6 +272,9 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
+            runtime_permissions: tokio::sync::RwLock::new(
+                TurnRuntimePermissions::from_turn_context(self),
+            ),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -521,13 +536,13 @@ impl Session {
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
+            base_instructions: session_configuration.base_instructions.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
-            approvals_reviewer: session_configuration.approvals_reviewer,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,

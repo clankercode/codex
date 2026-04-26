@@ -8,6 +8,7 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::turn_context::TurnRuntimePermissions;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
@@ -104,6 +105,9 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
+    turn_context_raw
+        .set_runtime_permissions(TurnRuntimePermissions::from_turn_context(&turn_context_raw))
+        .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 
@@ -299,6 +303,9 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
+    turn_context_raw
+        .set_runtime_permissions(TurnRuntimePermissions::from_turn_context(&turn_context_raw))
+        .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
     let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
@@ -452,6 +459,9 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
+    turn_context_raw
+        .set_runtime_permissions(TurnRuntimePermissions::from_turn_context(&turn_context_raw))
+        .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 

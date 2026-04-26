@@ -908,7 +908,7 @@ async fn maybe_request_mcp_tool_approval(
 
     let runtime_permissions = turn_context.runtime_permissions().await;
     if runtime_permissions.approval_policy == AskForApproval::OnRequest
-        && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+        && runtime_permissions.approvals_reviewer == ApprovalsReviewer::AutoReview
     {
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(

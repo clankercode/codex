@@ -1323,7 +1323,6 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     chat.bottom_pane
         .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    assert!(chat.bottom_pane.composer_text().is_empty());
 
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,

@@ -37,7 +37,6 @@ use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::rollout::find_thread_name_by_id;
-use crate::rollout::read_session_meta_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -548,10 +547,6 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        let developer_instructions = config
-            .developer_instructions
-            .clone()
-            .or_else(|| conversation_history.get_latest_developer_instructions());
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -603,7 +598,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
-            developer_instructions,
+            developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -1294,7 +1289,6 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let base_instructions_for_rollout = updates.base_instructions.clone();
         let (
             previous_cwd,
             sandbox_policy_changed,
@@ -1330,6 +1324,9 @@ impl Session {
             )
         };
 
+        self.refresh_active_turn_runtime_permissions(runtime_permissions)
+            .await;
+
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
             &next_cwd,
@@ -1340,27 +1337,17 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
                 .await;
         }
-        self.refresh_active_turn_runtime_permissions(runtime_permissions)
-            .await;
-        if let Some(base_instructions) = base_instructions_for_rollout {
-            self.persist_base_instructions_update(base_instructions)
-                .await;
-        }
 
         Ok(())
     }
 
-    async fn refresh_active_turn_runtime_permissions(
-        &self,
-        runtime_permissions: TurnRuntimePermissions,
-    ) {
+    async fn refresh_active_turn_runtime_permissions(&self, permissions: TurnRuntimePermissions) {
         let turn_contexts = {
             let active = self.active_turn.lock().await;
             active
                 .as_ref()
-                .map(|active_turn| {
-                    active_turn
-                        .tasks
+                .map(|turn| {
+                    turn.tasks
                         .values()
                         .map(|task| Arc::clone(&task.turn_context))
                         .collect::<Vec<_>>()
@@ -1370,7 +1357,7 @@ impl Session {
 
         for turn_context in turn_contexts {
             turn_context
-                .set_runtime_permissions(runtime_permissions.clone())
+                .set_runtime_permissions(permissions.clone())
                 .await;
         }
     }
@@ -3267,48 +3254,6 @@ impl Session {
                 warn!("{err}");
                 None
             }
-        }
-    }
-
-    async fn persist_base_instructions_update(&self, base_instructions: String) {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        let Some(recorder) = recorder else {
-            return;
-        };
-
-        if let Err(err) = recorder.persist().await {
-            error!("failed to persist rollout before updating session metadata: {err:#}");
-            return;
-        }
-        if let Err(err) = recorder.flush().await {
-            error!("failed to flush rollout before updating session metadata: {err:#}");
-            return;
-        }
-
-        let rollout_path = recorder.rollout_path().to_path_buf();
-        let mut session_meta = match read_session_meta_line(rollout_path.as_path()).await {
-            Ok(session_meta) => session_meta,
-            Err(err) => {
-                error!("failed to read latest session metadata for rollout update: {err:#}");
-                return;
-            }
-        };
-        session_meta.meta.base_instructions = Some(BaseInstructions {
-            text: base_instructions,
-        });
-
-        if let Err(err) = recorder
-            .record_items(&[RolloutItem::SessionMeta(session_meta)])
-            .await
-        {
-            error!("failed to record updated session metadata: {err:#}");
-            return;
-        }
-        if let Err(err) = recorder.flush().await {
-            error!("failed to flush updated session metadata: {err:#}");
         }
     }
 

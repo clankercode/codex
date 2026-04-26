@@ -87,6 +87,7 @@ pub mod legacy_core {
     pub use codex_core::McpManager;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
+    pub use codex_core::find_thread_name_by_id;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
@@ -99,6 +100,10 @@ pub mod legacy_core {
         pub mod edit {
             pub use codex_core::config::edit::*;
         }
+    }
+
+    pub mod config_loader {
+        pub use codex_core::config_loader::*;
     }
 
     pub mod connectors {
@@ -114,6 +119,7 @@ pub mod legacy_core {
     }
 
     pub mod plugins {
+        pub use codex_core::plugins::PluginCapabilitySummary;
         pub use codex_core::plugins::PluginsManager;
     }
 
@@ -123,6 +129,12 @@ pub mod legacy_core {
 
     pub mod review_prompts {
         pub use codex_core::review_prompts::*;
+    }
+
+    pub mod skills {
+        pub mod model {
+            pub use codex_core::skills::SkillMetadata;
+        }
     }
 
     pub mod test_support {

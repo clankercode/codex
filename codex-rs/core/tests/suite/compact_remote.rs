@@ -1110,6 +1110,7 @@ async fn remote_manual_compact_uses_configured_compact_model_only_for_compaction
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "manual remote compact".into(),
                 text_elements: Vec::new(),
@@ -1140,6 +1141,7 @@ async fn remote_manual_compact_uses_configured_compact_model_only_for_compaction
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "after compact".into(),
                 text_elements: Vec::new(),
@@ -1198,6 +1200,7 @@ async fn remote_manual_compact_after_resume_uses_persisted_session_base_instruct
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "persist base instructions".into(),
                 text_elements: Vec::new(),

@@ -454,6 +454,16 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     turn_context.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
     turn_context.file_system_sandbox_policy = read_only_file_system_sandbox_policy();
     turn_context.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    let turn = std::sync::Arc::new(turn_context);
+    turn.set_runtime_permissions(TurnRuntimePermissions {
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy,
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        windows_sandbox_level: turn.windows_sandbox_level,
+    })
+    .await;
 
     let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
     let target = std::env::temp_dir().join("execve-hook-short-circuit.txt");
@@ -464,13 +474,9 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     let provider = CoreShellActionProvider {
         policy: std::sync::Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
         session: std::sync::Arc::new(session),
-        turn: std::sync::Arc::new(turn_context),
+        turn,
         call_id: "execve-hook-call".to_string(),
         tool_name: GuardianCommandSource::Shell,
-        approval_policy: AskForApproval::OnRequest,
-        sandbox_policy,
-        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,

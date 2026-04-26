@@ -43,7 +43,6 @@ mod safety_check_downgrade;
 mod skills_list;
 mod thread_archive;
 mod thread_fork;
-mod thread_import_transcript;
 mod thread_inject_items;
 mod thread_list;
 mod thread_loaded_list;

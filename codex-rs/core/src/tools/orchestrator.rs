@@ -117,13 +117,10 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let otel_user = ToolDecisionSource::User;
-        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
-        let otel_cfg = ToolDecisionSource::Config;
         let runtime_permissions = turn_ctx.runtime_permissions().await;
         let use_guardian = strict_auto_review
             || (runtime_permissions.approval_policy == AskForApproval::OnRequest
-                && runtime_permissions.approvals_reviewer == ApprovalsReviewer::GuardianSubagent);
+                && runtime_permissions.approvals_reviewer == ApprovalsReviewer::AutoReview);
 
         // 1) Approval
         let mut already_approved = false;

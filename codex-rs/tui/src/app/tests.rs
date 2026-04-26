@@ -4906,6 +4906,18 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
     assert_eq!(handled, true);
 }
 
+#[test]
+fn mcp_reload_has_app_command_view() {
+    let op = AppCommand::from(Op::RefreshMcpServers {
+        config: codex_protocol::protocol::McpServerRefreshConfig {
+            mcp_servers: serde_json::Value::Null,
+            mcp_oauth_credentials_store_mode: serde_json::Value::Null,
+        },
+    });
+
+    assert!(matches!(op.view(), AppCommandView::RefreshMcpServers));
+}
+
 #[tokio::test]
 async fn clear_only_ui_reset_preserves_chat_session_state() {
     let mut app = make_test_app().await;

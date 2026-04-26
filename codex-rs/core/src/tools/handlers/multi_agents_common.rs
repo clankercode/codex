@@ -231,7 +231,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     config.model_reasoning_summary = Some(turn.reasoning_summary);
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
-    config.compact_model = turn.compact_model.clone();
+    config.compact_model = turn.config.compact_model.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     Ok(config)

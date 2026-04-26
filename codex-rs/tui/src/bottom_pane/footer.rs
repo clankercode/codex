@@ -77,7 +77,6 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
-    pub(crate) status_line_right_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
     /// Active thread label shown when the footer is rendering contextual information instead of an
     /// instructional hint.
@@ -713,22 +712,6 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
     line
 }
 
-pub(crate) fn join_footer_segments(
-    left: Option<Line<'static>>,
-    right: Option<Line<'static>>,
-) -> Option<Line<'static>> {
-    match (left, right) {
-        (Some(mut left), Some(right)) => {
-            left.spans.push(" · ".dim());
-            left.spans.extend(right.spans);
-            Some(left)
-        }
-        (Some(left), None) => Some(left),
-        (None, Some(right)) => Some(right),
-        (None, None) => None,
-    }
-}
-
 /// Whether the current footer mode allows contextual information to replace instructional hints.
 ///
 /// In practice this means the composer is idle, or it has a draft but is not currently running a
@@ -1249,19 +1232,10 @@ mod tests {
                     )
                 };
                 let right_line = if status_line_active {
-                    let full_mode =
-                        mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
-                    let compact_mode = mode_indicator_line(
+                    let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
+                    let compact = mode_indicator_line(
                         collaboration_mode_indicator,
                         /*show_cycle_hint*/ false,
-                    );
-                    let full = join_footer_segments(
-                        full_mode,
-                        props.status_line_right_value.clone().map(Line::dim),
-                    );
-                    let compact = join_footer_segments(
-                        compact_mode,
-                        props.status_line_right_value.clone().map(Line::dim),
                     );
                     let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(area, left_width, full_width) {
@@ -1399,7 +1373,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1418,7 +1391,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1437,7 +1409,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1456,7 +1427,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1475,7 +1445,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1494,7 +1463,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1513,7 +1481,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1532,7 +1499,6 @@ mod tests {
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1551,7 +1517,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1570,7 +1535,6 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
                 status_line_value: None,
-                status_line_right_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
             },
@@ -1587,7 +1551,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: None,
-            status_line_right_value: None,
             status_line_enabled: false,
             active_agent_label: None,
         };
@@ -1617,7 +1580,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: None,
-            status_line_right_value: None,
             status_line_enabled: false,
             active_agent_label: None,
         };
@@ -1640,7 +1602,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1658,7 +1619,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1676,7 +1636,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1694,7 +1653,6 @@ mod tests {
             context_window_percent: Some(50),
             context_window_used_tokens: None,
             status_line_value: None, // command timed out / empty
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1717,7 +1675,6 @@ mod tests {
             context_window_percent: Some(50),
             context_window_used_tokens: None,
             status_line_value: None,
-            status_line_right_value: None,
             status_line_enabled: false,
             active_agent_label: None,
         };
@@ -1740,7 +1697,6 @@ mod tests {
             context_window_percent: Some(50),
             context_window_used_tokens: None,
             status_line_value: None,
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1766,7 +1722,6 @@ mod tests {
             status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1789,7 +1744,6 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: None,
-            status_line_right_value: None,
             status_line_enabled: false,
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
@@ -1807,37 +1761,11 @@ mod tests {
             context_window_percent: None,
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
 
         snapshot_footer("footer_status_line_with_active_agent_label", props);
-
-        let props = FooterProps {
-            mode: FooterMode::ComposerEmpty,
-            esc_backtrack_hint: false,
-            use_shift_enter_hint: false,
-            is_task_running: false,
-            collaboration_modes_enabled: false,
-            is_wsl: false,
-            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: None,
-            context_window_used_tokens: None,
-            status_line_value: Some(Line::from(
-                "gpt-5.4 high · codex · master · branch/very-long-name".to_string(),
-            )),
-            status_line_right_value: Some(Line::from("2m 13s".to_string())),
-            status_line_enabled: true,
-            active_agent_label: None,
-        };
-
-        snapshot_footer_with_mode_indicator(
-            "footer_status_line_idle_time_right_pinned",
-            /*width*/ 40,
-            &props,
-            /*collaboration_mode_indicator*/ None,
-        );
     }
 
     #[test]
@@ -1856,7 +1784,6 @@ mod tests {
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
             )),
-            status_line_right_value: None,
             status_line_enabled: true,
             active_agent_label: None,
         };
@@ -1878,40 +1805,6 @@ mod tests {
         assert!(
             screen.contains('…'),
             "status line should be truncated with ellipsis to keep mode indicator"
-        );
-    }
-
-    #[test]
-    fn footer_status_line_truncates_left_before_hiding_idle_time() {
-        let props = FooterProps {
-            mode: FooterMode::ComposerEmpty,
-            esc_backtrack_hint: false,
-            use_shift_enter_hint: false,
-            is_task_running: false,
-            collaboration_modes_enabled: false,
-            is_wsl: false,
-            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: None,
-            context_window_used_tokens: None,
-            status_line_value: Some(Line::from(
-                "gpt-5.4 high · codex · master · branch/very-long-name".to_string(),
-            )),
-            status_line_right_value: Some(Line::from("2m 13s".to_string())),
-            status_line_enabled: true,
-            active_agent_label: None,
-        };
-
-        let screen = render_footer_with_mode_indicator(
-            /*width*/ 40, &props, /*collaboration_mode_indicator*/ None,
-        );
-        let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            collapsed.contains("2m 13s"),
-            "idle time should remain visible on the right"
-        );
-        assert!(
-            screen.contains('…'),
-            "left status line should truncate before hiding idle time"
         );
     }
 

@@ -250,12 +250,14 @@ pub(crate) fn build_turn_start_request(
                 text: request.text,
                 text_elements: Vec::new(),
             }],
-            prefixed_messages: None,
+            prefixed_items: None,
             responsesapi_client_metadata: None,
+            environments: None,
             cwd: request.cwd,
             approval_policy: request.approval_policy,
             approvals_reviewer: request.approvals_reviewer,
             sandbox_policy: None,
+            permission_profile: None,
             model: request.model,
             service_tier: None,
             effort: None,
@@ -263,8 +265,6 @@ pub(crate) fn build_turn_start_request(
             personality: None,
             output_schema: None,
             collaboration_mode: None,
-            base_instructions: None,
-            developer_instructions: None,
         },
     }
 }
@@ -306,7 +306,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 cwd: Some(PathBuf::from("/tmp/project")),
                 approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 base_instructions: None,
             },
         );
@@ -320,7 +320,7 @@ mod tests {
                 assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
                 assert_eq!(
                     params.approvals_reviewer,
-                    Some(ApprovalsReviewer::GuardianSubagent)
+                    Some(ApprovalsReviewer::AutoReview)
                 );
             }
             other => panic!("expected ThreadResume request, got {other:?}"),
@@ -383,7 +383,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 cwd: Some(PathBuf::from("/tmp/project")),
                 approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             },
         );
 
@@ -396,7 +396,7 @@ mod tests {
                 assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
                 assert_eq!(
                     params.approvals_reviewer,
-                    Some(ApprovalsReviewer::GuardianSubagent)
+                    Some(ApprovalsReviewer::AutoReview)
                 );
                 assert_eq!(
                     params.input,

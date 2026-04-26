@@ -27,6 +27,20 @@ use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
+fn tempdir_outside_git_ancestor() -> TempDir {
+    #[cfg(unix)]
+    {
+        if let Ok(dir) = tempfile::Builder::new()
+            .prefix("codex-nongit-")
+            .tempdir_in("/var/tmp")
+        {
+            return dir;
+        }
+    }
+
+    TempDir::new().expect("tempdir")
+}
+
 fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThread {
     StoredThread {
         thread_id: ThreadId::new(),
@@ -234,7 +248,7 @@ fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
 
 #[tokio::test]
 async fn workspace_section_requires_meaningful_structure() {
-    let cwd = TempDir::new().expect("tempdir");
+    let cwd = tempdir_outside_git_ancestor();
     assert_eq!(
         build_workspace_section_with_user_root(&cwd.path().abs(), /*user_root*/ None).await,
         None
@@ -280,7 +294,7 @@ async fn workspace_section_includes_user_root_tree_when_distinct() {
 
 #[tokio::test]
 async fn recent_work_section_groups_threads_by_cwd() {
-    let root = TempDir::new().expect("tempdir");
+    let root = tempdir_outside_git_ancestor();
     let repo = root.path().join("repo");
     let workspace_a = repo.join("workspace-a");
     let workspace_b = repo.join("workspace-b");

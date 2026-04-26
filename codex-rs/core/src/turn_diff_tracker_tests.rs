@@ -10,7 +10,10 @@ fn git_blob_sha1_hex(data: &str) -> String {
 
 fn normalize_diff_for_test(input: &str, root: &Path) -> String {
     let root_str = root.display().to_string().replace('\\', "/");
-    let replaced = input.replace(&root_str, "<TMP>");
+    let mut replaced = input.replace(&root_str, "<TMP>");
+    if let Some(root_name) = root.file_name().and_then(|name| name.to_str()) {
+        replaced = replaced.replace(root_name, "<TMP>");
+    }
     // Split into blocks on lines starting with "diff --git ", sort blocks for determinism, and rejoin
     let mut blocks: Vec<String> = Vec::new();
     let mut current = String::new();
