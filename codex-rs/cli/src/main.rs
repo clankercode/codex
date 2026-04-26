@@ -1803,10 +1803,12 @@ fn finalize_fork_interactive(
 /// Merge flags provided to `codex resume`/`codex fork` so they take precedence over any
 /// root-level flags. Only overrides fields explicitly set on the subcommand-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
-fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
-    interactive
-        .shared
-        .apply_subcommand_overrides(subcommand_cli.shared.into_inner());
+fn merge_interactive_cli_flags(interactive: &mut TuiCli, mut subcommand_cli: TuiCli) {
+    let shared = std::mem::take(&mut subcommand_cli.shared).into_inner();
+    let images = std::mem::take(&mut subcommand_cli.images);
+    let add_dir = std::mem::take(&mut subcommand_cli.add_dir);
+
+    interactive.shared.apply_subcommand_overrides(shared);
     if let Some(approval) = subcommand_cli.approval_policy {
         interactive.approval_policy = Some(approval);
     }
@@ -1825,11 +1827,11 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if let Some(fd) = subcommand_cli.control_responses_fd {
         interactive.control_responses_fd = Some(fd);
     }
-    if !subcommand_cli.images.is_empty() {
-        interactive.images = subcommand_cli.images;
+    if !images.is_empty() {
+        interactive.images = images;
     }
-    if !subcommand_cli.add_dir.is_empty() {
-        interactive.add_dir.extend(subcommand_cli.add_dir);
+    if !add_dir.is_empty() {
+        interactive.add_dir.extend(add_dir);
     }
     if let Some(prompt) = subcommand_cli.prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
