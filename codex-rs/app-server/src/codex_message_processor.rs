@@ -5043,10 +5043,18 @@ impl CodexMessageProcessor {
                 return None;
             }
         };
+        let Some(rollout_path) = stored_thread.rollout_path.clone() else {
+            self.send_internal_error(
+                request_id,
+                format!("thread {thread_id} did not include a rollout path"),
+            )
+            .await;
+            return None;
+        };
         Some(InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history,
-            rollout_path: stored_thread.rollout_path.clone(),
+            rollout_path,
         }))
     }
 
@@ -5225,6 +5233,14 @@ impl CodexMessageProcessor {
             .await;
             return;
         };
+        let Some(source_rollout_path) = source_thread.rollout_path.clone() else {
+            self.send_internal_error(
+                request_id,
+                format!("thread {source_thread_id} did not include a rollout path"),
+            )
+            .await;
+            return;
+        };
         let history_cwd = Some(source_thread.cwd.clone());
 
         // Persist Windows sandbox mode.
@@ -5295,7 +5311,7 @@ impl CodexMessageProcessor {
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: source_thread_id,
                     history: history_items.clone(),
-                    rollout_path: source_thread.rollout_path.clone(),
+                    rollout_path: source_rollout_path,
                 }),
                 persist_extended_history,
                 self.request_trace_context(&request_id).await,
