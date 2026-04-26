@@ -1277,7 +1277,7 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
         }))
         .await;
 
@@ -1306,7 +1306,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
         }))
         .await;
 
@@ -1399,7 +1399,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
         }))
         .await;
 
@@ -2845,6 +2845,7 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3019,6 +3020,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

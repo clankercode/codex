@@ -203,6 +203,7 @@ fn compatibility_workspace_write_policy(
 
     SandboxPolicy::WorkspaceWrite {
         writable_roots,
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

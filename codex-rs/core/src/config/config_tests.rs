@@ -806,6 +806,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![memories_root],
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1163,6 +1164,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: false,
         }
     );
@@ -1228,6 +1230,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: false,
         }
     );
@@ -1549,6 +1552,7 @@ trust_level = "trusted"
             resolution,
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root.clone()],
+                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -1589,6 +1593,7 @@ exclude_slash_tmp = true
             resolution,
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root],
+                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,

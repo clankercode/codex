@@ -766,6 +766,7 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
     .expect("absolute temp dir");
     let policy = sandbox_policy_with_additional_permissions(
         &SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: false,
         },
         &PermissionProfile {
@@ -782,6 +783,7 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
     assert_eq!(
         policy,
         SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: true,
         }
     );

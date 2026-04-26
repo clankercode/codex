@@ -585,6 +585,7 @@ fn sandbox_policy_with_additional_permissions(
         },
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
+            read_only_access,
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
@@ -593,14 +594,19 @@ fn sandbox_policy_with_additional_permissions(
             merged_writes.extend(extra_writes);
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: dedup_absolute_paths(merged_writes),
+                read_only_access: read_only_access.clone(),
                 network_access: merge_network_access(*network_access, additional_permissions),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
         }
-        SandboxPolicy::ReadOnly { network_access } => {
+        SandboxPolicy::ReadOnly {
+            access,
+            network_access,
+        } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
+                    access: access.clone(),
                     network_access: merge_network_access(*network_access, additional_permissions),
                 }
             } else {
@@ -609,6 +615,7 @@ fn sandbox_policy_with_additional_permissions(
                 // UnderDevelopment, it's a useful approximation of the desired behavior.
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: dedup_absolute_paths(extra_writes),
+                    read_only_access: access.clone(),
                     network_access: merge_network_access(*network_access, additional_permissions),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,

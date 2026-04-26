@@ -190,6 +190,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 }),
             },
             policy: &SandboxPolicy::ReadOnly {
+                access: Default::default(),
                 network_access: false,
             },
             file_system_policy: &FileSystemSandboxPolicy::restricted(vec![

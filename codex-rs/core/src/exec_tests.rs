@@ -470,6 +470,7 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
 fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -499,6 +500,7 @@ fn windows_elevated_allows_split_restricted_read_policies() {
     .expect("absolute docs");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let policy = SandboxPolicy::ReadOnly {
+        access: Default::default(),
         network_access: false,
     };
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -528,6 +530,7 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
     std::fs::create_dir_all(&docs).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -571,6 +574,7 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
     std::fs::create_dir_all(&docs).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -617,6 +621,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -669,6 +674,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
     std::fs::create_dir_all(&docs).expect("create docs");
     let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let policy = SandboxPolicy::ReadOnly {
+        access: Default::default(),
         network_access: false,
     };
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -707,6 +713,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
     let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -761,6 +768,7 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
     std::fs::create_dir_all(&blocked).expect("create blocked");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -808,6 +816,7 @@ fn windows_elevated_rejects_unreadable_globs() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -857,6 +866,7 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
     std::fs::create_dir_all(&nested).expect("create nested");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

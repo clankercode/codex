@@ -84,6 +84,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
@@ -1838,6 +1839,7 @@ impl SandboxPolicy {
             }
             SandboxPolicy::ReadOnly { network_access } => {
                 codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                    access: CoreReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                 }
             }
@@ -1856,6 +1858,7 @@ impl SandboxPolicy {
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
+                read_only_access: CoreReadOnlyAccess::FullAccess,
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
@@ -1870,7 +1873,7 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            codex_protocol::protocol::SandboxPolicy::ReadOnly { network_access } => {
+            codex_protocol::protocol::SandboxPolicy::ReadOnly { network_access, .. } => {
                 SandboxPolicy::ReadOnly { network_access }
             }
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
@@ -1886,6 +1889,7 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                ..
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
@@ -8981,6 +8985,7 @@ mod tests {
         assert_eq!(
             core_policy,
             codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: CoreReadOnlyAccess::FullAccess,
                 network_access: true,
             }
         );
@@ -9617,6 +9622,7 @@ mod tests {
             core_policy,
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
+                read_only_access: CoreReadOnlyAccess::FullAccess,
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
