@@ -879,9 +879,11 @@ fn parse_approval_policy(value: &str) -> Result<AskForApproval> {
 fn parse_approvals_reviewer(value: &str) -> Result<ApprovalsReviewer> {
     match value {
         "user" => Ok(ApprovalsReviewer::User),
-        "guardian_subagent" | "guardian-subagent" => Ok(ApprovalsReviewer::GuardianSubagent),
+        "auto_review" | "auto-review" | "guardian_subagent" | "guardian-subagent" => {
+            Ok(ApprovalsReviewer::AutoReview)
+        }
         _ => anyhow::bail!(
-            "unknown approvals reviewer: {value}. Expected one of: user, guardian_subagent"
+            "unknown approvals reviewer: {value}. Expected one of: user, auto_review, guardian_subagent"
         ),
     }
 }
@@ -1175,14 +1177,14 @@ mod tests {
         let request = thread_session_request_from_cli(
             &cli,
             AskForApproval::OnRequest,
-            Some(ApprovalsReviewer::GuardianSubagent),
+            Some(ApprovalsReviewer::AutoReview),
             None,
         )
         .expect("request should be valid");
 
         assert_eq!(
             request.approvals_reviewer,
-            Some(ApprovalsReviewer::GuardianSubagent)
+            Some(ApprovalsReviewer::AutoReview)
         );
     }
 
