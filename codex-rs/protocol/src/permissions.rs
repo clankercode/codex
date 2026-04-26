@@ -16,6 +16,7 @@ use tracing::error;
 use ts_rs::TS;
 
 use crate::protocol::NetworkAccess;
+use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 
@@ -907,6 +908,7 @@ impl FileSystemSandboxPolicy {
                             writable_roots,
                             /*normalize_effective_paths*/ false,
                         ),
+                        read_only_access: ReadOnlyAccess::FullAccess,
                         network_access: network_policy.is_enabled(),
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
@@ -922,6 +924,7 @@ impl FileSystemSandboxPolicy {
                     ));
                 } else {
                     SandboxPolicy::ReadOnly {
+                        access: ReadOnlyAccess::FullAccess,
                         network_access: network_policy.is_enabled(),
                     }
                 }
@@ -1512,6 +1515,7 @@ mod tests {
         assert_eq!(
             sandbox_policy,
             SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
                 network_access: false,
             }
         );
@@ -1549,6 +1553,7 @@ mod tests {
     fn legacy_workspace_write_projection_preserves_symbolic_cwd() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1641,6 +1646,7 @@ mod tests {
         let dot_codex_config = cwd.path().join(".codex").join("config.toml");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1664,6 +1670,7 @@ mod tests {
         .expect("absolute dot codex");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

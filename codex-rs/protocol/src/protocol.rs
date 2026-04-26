@@ -49,7 +49,6 @@ use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
-use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -59,6 +58,8 @@ use serde_with::serde_as;
 use strum_macros::Display;
 use tracing::error;
 use ts_rs::TS;
+
+pub type GitSha = String;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
@@ -1865,6 +1866,7 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    CyberPolicy,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1897,7 +1899,9 @@ impl CodexErrorInfo {
     /// Whether this error should mark the current turn as failed when replaying history.
     pub fn affects_turn_status(&self) -> bool {
         match self {
-            Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
+            Self::CyberPolicy
+            | Self::ThreadRollbackFailed
+            | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
@@ -4567,7 +4571,7 @@ mod tests {
 
         assert_eq!(
             sorted_writable_roots(
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path())
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy)
                     .get_writable_roots_with_cwd(cwd.path())
             ),
             vec![(canonical_cwd, vec![expected_dot_codex.to_path_buf()])]
@@ -4659,7 +4663,7 @@ mod tests {
         ];
 
         for expected in policies {
-            let actual = FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected, cwd.path())
+            let actual = FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected)
                 .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
                 .expect("legacy bridge should preserve legacy policy semantics");
 
