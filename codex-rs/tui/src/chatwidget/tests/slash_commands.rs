@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -2130,6 +2131,65 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         "expected fast-mode persistence app event; events: {events:?}"
     );
 
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn effort_slash_command_updates_reasoning_effort_for_all_levels() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    for (arg, expected_effort) in [
+        ("off", ReasoningEffortConfig::None),
+        ("low", ReasoningEffortConfig::Low),
+        ("medium", ReasoningEffortConfig::Medium),
+        ("high", ReasoningEffortConfig::High),
+        ("xhigh", ReasoningEffortConfig::XHigh),
+    ] {
+        chat.dispatch_command_with_args(SlashCommand::Effort, arg.to_string(), Vec::new());
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == expected_effort
+            )),
+            "expected /effort {arg} to update reasoning effort; events: {events:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AppEvent::CodexOp(Op::OverrideTurnContext {
+                    effort: Some(Some(effort)),
+                    ..
+                }) if *effort == expected_effort
+            )),
+            "expected /effort {arg} to override turn context; events: {events:?}"
+        );
+
+        assert_eq!(chat.current_reasoning_effort(), Some(expected_effort));
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
+async fn effort_slash_command_status_reports_current_reasoning_effort() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Effort, "high".to_string(), Vec::new());
+    let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.dispatch_command_with_args(SlashCommand::Effort, "status".to_string(), Vec::new());
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered.len(), 1);
+    assert!(
+        rendered[0].contains("Reasoning effort is high."),
+        "expected /effort status to report the current reasoning effort, got: {rendered:?}"
+    );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
