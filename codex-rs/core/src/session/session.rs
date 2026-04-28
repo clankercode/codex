@@ -129,6 +129,12 @@ impl SessionConfiguration {
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
+        if let Some(base_instructions) = updates.base_instructions.clone() {
+            next_configuration.base_instructions = base_instructions;
+        }
+        if let Some(developer_instructions) = updates.developer_instructions.clone() {
+            next_configuration.developer_instructions = Some(developer_instructions);
+        }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
         }
@@ -228,6 +234,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
+    pub(crate) base_instructions: Option<String>,
+    pub(crate) developer_instructions: Option<String>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     /// Turn-local environment override. `None` inherits the sticky thread
     /// environments stored on `SessionConfiguration`; `Some([])` explicitly

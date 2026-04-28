@@ -3658,6 +3658,82 @@ pub struct ThreadForkResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportTranscriptParams {
+    /// Optional source thread used to inherit defaults such as cwd and stored
+    /// metadata. The imported transcript still creates a fresh thread id.
+    #[ts(optional = nullable)]
+    pub source_thread_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[ts(optional = nullable)]
+    pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the imported thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
+    #[ts(optional = nullable)]
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    #[ts(optional = nullable)]
+    pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+    #[serde(default)]
+    pub persist_extended_history: bool,
+    pub messages: Vec<InjectedMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadImportTranscriptResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<ServiceTier>,
+    pub cwd: AbsolutePathBuf,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<AbsolutePathBuf>,
+    #[experimental(nested)]
+    pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Legacy sandbox policy retained for compatibility. New clients should use
+    /// `permissionProfile` when present as the canonical active permissions
+    /// view.
+    pub sandbox: SandboxPolicy,
+    /// Canonical active permissions view for this thread.
+    #[serde(default)]
+    pub permission_profile: Option<PermissionProfile>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -5219,6 +5295,10 @@ pub struct TurnEnvironmentParams {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional typed history messages to append immediately before this turn's
+    /// user input if the turn starts successfully.
+    #[ts(optional = nullable)]
+    pub prefixed_messages: Option<Vec<InjectedMessage>>,
     /// Raw Responses API items to append immediately before the user input
     /// when this starts a fresh turn.
     #[ts(optional = nullable)]
@@ -5274,6 +5354,12 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Override the base instructions for this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub base_instructions: Option<String>,
+    /// Override the developer instructions for this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
     #[ts(optional = nullable)]
@@ -5362,6 +5448,42 @@ pub struct ThreadInjectItemsParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadInjectItemsResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum InjectedMessageRole {
+    User,
+    Assistant,
+    Developer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InjectedMessage {
+    pub role: InjectedMessageRole,
+    /// Plain-text message content. Use `thread/inject_items` when you need raw
+    /// Responses API item control or non-text content.
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectMessagesParams {
+    pub thread_id: String,
+    /// Typed text messages to append to the thread's model-visible history.
+    ///
+    /// Assistant messages are stored as `output_text`; user and developer
+    /// messages use `input_text`.
+    pub messages: Vec<InjectedMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadInjectMessagesResponse {}
 
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
@@ -10643,6 +10765,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            prefixed_messages: None,
             prefixed_items: None,
             responsesapi_client_metadata: None,
             environments: None,
@@ -10655,6 +10778,8 @@ mod tests {
             service_tier: None,
             effort: None,
             summary: None,
+            base_instructions: None,
+            developer_instructions: None,
             output_schema: None,
             collaboration_mode: None,
             personality: None,

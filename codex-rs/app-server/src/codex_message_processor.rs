@@ -160,10 +160,14 @@ use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadImportTranscriptParams;
+use codex_app_server_protocol::ThreadImportTranscriptResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
+use codex_app_server_protocol::ThreadInjectMessagesParams;
+use codex_app_server_protocol::ThreadInjectMessagesResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -330,6 +334,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
@@ -954,6 +959,10 @@ impl CodexMessageProcessor {
                 self.thread_fork(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ThreadImportTranscript { request_id, params } => {
+                self.thread_import_transcript(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
                     .await;
@@ -1091,6 +1100,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadInjectItems { request_id, params } => {
                 self.thread_inject_items(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadInjectMessages { request_id, params } => {
+                self.thread_inject_messages(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadUpdate { request_id, params } => {
@@ -5181,6 +5194,253 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_import_transcript(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadImportTranscriptParams,
+    ) {
+        let ThreadImportTranscriptParams {
+            source_thread_id,
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            permission_profile,
+            config: mut request_overrides,
+            base_instructions,
+            developer_instructions,
+            personality,
+            ephemeral,
+            persist_extended_history,
+            messages,
+        } = params;
+
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        if messages.is_empty() {
+            self.send_invalid_request_error(request_id, "messages must not be empty".to_string())
+                .await;
+            return;
+        }
+
+        let history_items = messages
+            .into_iter()
+            .map(typed_message_to_response_item)
+            .map(RolloutItem::ResponseItem)
+            .collect::<Vec<_>>();
+
+        let mut typesafe_overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            permission_profile,
+            base_instructions,
+            developer_instructions,
+            personality,
+        );
+        typesafe_overrides.ephemeral = ephemeral.then_some(true);
+
+        let history_cwd = if let Some(source_thread_id) = source_thread_id.as_deref() {
+            let Some((source_history, _stored_thread)) = self
+                .resume_thread_from_rollout(request_id.clone(), source_thread_id, None)
+                .await
+            else {
+                return;
+            };
+            self.load_and_apply_persisted_resume_metadata(
+                &source_history,
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await;
+            source_history.session_cwd()
+        } else {
+            None
+        };
+
+        let config = match self
+            .config_manager
+            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing
+                    .send_error(request_id, config_load_error(&err))
+                    .await;
+                return;
+            }
+        };
+
+        let fallback_model_provider = config.model_provider_id.clone();
+        let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let thread_store = configured_thread_store(&config);
+        let initial_history = InitialHistory::Forked(history_items.clone());
+
+        let NewThread {
+            thread_id,
+            thread: imported_thread,
+            session_configured,
+            ..
+        } = match self
+            .thread_manager
+            .fork_thread_from_history(
+                ForkSnapshot::Interrupted,
+                config,
+                initial_history,
+                persist_extended_history,
+                self.request_trace_context(&request_id).await,
+            )
+            .await
+        {
+            Ok(thread) => thread,
+            Err(err) => {
+                match err {
+                    CodexErr::Io(_) | CodexErr::Json(_) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to import transcript: {err}"),
+                        )
+                        .await;
+                    }
+                    CodexErr::InvalidRequest(message) => {
+                        self.send_invalid_request_error(request_id, message).await;
+                    }
+                    _ => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("error importing transcript: {err}"),
+                        )
+                        .await;
+                    }
+                }
+                return;
+            }
+        };
+
+        Self::log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                /*raw_events_enabled*/ false,
+                ApiVersion::V2,
+            )
+            .await,
+            thread_id,
+            request_id.connection_id,
+            "thread",
+        );
+
+        let mut thread = if let Some(rollout_path) = session_configured.rollout_path.as_ref() {
+            let Some(stored_thread) = self
+                .read_stored_thread_for_new_fork(
+                    request_id.clone(),
+                    thread_store.as_ref(),
+                    thread_id,
+                    /*include_history*/ true,
+                )
+                .await
+            else {
+                return;
+            };
+            match self
+                .stored_thread_to_api_thread(
+                    stored_thread,
+                    fallback_model_provider.as_str(),
+                    /*include_turns*/ true,
+                )
+                .await
+            {
+                Ok(thread) => thread,
+                Err(message) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for imported thread {thread_id}: {message}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            let config_snapshot = imported_thread.config_snapshot().await;
+            let mut thread =
+                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+            thread.preview = preview_from_rollout_items(&history_items);
+            if let Err(message) = populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                /*active_turn*/ None,
+            )
+            .await
+            {
+                self.send_internal_error(request_id, message).await;
+                return;
+            }
+            thread
+        };
+
+        self.thread_watch_manager
+            .upsert_thread_silently(thread.clone())
+            .await;
+
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            /*has_in_progress_turn*/ false,
+        );
+        let permission_profile = thread_response_permission_profile(
+            imported_thread.config_snapshot().await.permission_profile,
+        );
+
+        let response = ThreadImportTranscriptResponse {
+            thread: thread.clone(),
+            model: session_configured.model,
+            model_provider: session_configured.model_provider_id,
+            service_tier: session_configured.service_tier,
+            cwd: session_configured.cwd,
+            instruction_sources,
+            approval_policy: session_configured.approval_policy.into(),
+            approvals_reviewer: session_configured.approvals_reviewer.into(),
+            sandbox: session_configured.sandbox_policy.into(),
+            permission_profile,
+            reasoning_effort: session_configured.reasoning_effort,
+        };
+        let connection_id = request_id.connection_id;
+        self.outgoing.send_response(request_id, response).await;
+
+        let notif = thread_started_notification(thread);
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
+
+        if let Some(source_thread_id) = source_thread_id
+            && let Ok(source_thread_id) = ThreadId::from_string(&source_thread_id)
+        {
+            let _ = self
+                .thread_state_manager
+                .unsubscribe_connection_from_thread(source_thread_id, connection_id)
+                .await;
+        }
+    }
+
     async fn thread_fork(&self, request_id: ConnectionRequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
@@ -7137,6 +7397,7 @@ impl CodexMessageProcessor {
         let TurnStartParams {
             thread_id: _,
             input,
+            prefixed_messages,
             prefixed_items,
             responsesapi_client_metadata,
             environments,
@@ -7150,6 +7411,8 @@ impl CodexMessageProcessor {
             effort,
             summary,
             personality,
+            base_instructions,
+            developer_instructions,
             output_schema,
             collaboration_mode,
         } = params;
@@ -7183,7 +7446,11 @@ impl CodexMessageProcessor {
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
-        let prefixed_items = prefixed_items
+        let typed_prefixed_items = prefixed_messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(typed_message_to_response_item);
+        let raw_prefixed_items = prefixed_items
             .unwrap_or_default()
             .into_iter()
             .enumerate()
@@ -7193,13 +7460,14 @@ impl CodexMessageProcessor {
                 })
             })
             .collect::<std::result::Result<Vec<_>, _>>();
-        let prefixed_items = match prefixed_items {
+        let mut prefixed_items = match raw_prefixed_items {
             Ok(items) => items,
             Err(message) => {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
         };
+        prefixed_items.splice(0..0, typed_prefixed_items);
 
         let has_any_overrides = cwd.is_some()
             || approval_policy.is_some()
@@ -7212,6 +7480,8 @@ impl CodexMessageProcessor {
             || summary.is_some()
             || collaboration_mode.is_some()
             || personality.is_some();
+        let has_instruction_overrides =
+            base_instructions.is_some() || developer_instructions.is_some();
 
         if sandbox_policy.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
@@ -7257,6 +7527,22 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
+        }
+
+        if has_instruction_overrides
+            && let Err(err) = thread
+                .update_instruction_overrides(
+                    base_instructions.clone(),
+                    developer_instructions.clone(),
+                )
+                .await
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!("invalid instruction override: {err}"),
+            )
+            .await;
+            return;
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
@@ -7409,6 +7695,44 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_inject_messages(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadInjectMessagesParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let items = params
+            .messages
+            .into_iter()
+            .map(typed_message_to_response_item)
+            .collect::<Vec<_>>();
+
+        match thread.inject_response_items(items).await {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ThreadInjectMessagesResponse {})
+                    .await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to inject typed messages: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn thread_update(&self, request_id: ConnectionRequestId, params: ThreadUpdateParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(value) => value,
@@ -7427,11 +7751,17 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if params.base_instructions.is_some() || params.developer_instructions.is_some() {
+        if (params.base_instructions.is_some() || params.developer_instructions.is_some())
+            && let Err(err) = thread
+                .update_instruction_overrides(
+                    params.base_instructions.clone(),
+                    params.developer_instructions.clone(),
+                )
+                .await
+        {
             self.send_invalid_request_error(
                 request_id,
-                "`baseInstructions` and `developerInstructions` are not supported by thread/update"
-                    .to_string(),
+                format!("invalid instruction override: {err}"),
             )
             .await;
             return;
@@ -9446,6 +9776,33 @@ fn merge_persisted_resume_metadata(
             "model_reasoning_effort".to_string(),
             serde_json::Value::String(reasoning_effort.to_string()),
         );
+    }
+}
+
+fn typed_message_to_response_item(
+    message: codex_app_server_protocol::InjectedMessage,
+) -> ResponseItem {
+    let (role, content) = match message.role {
+        codex_app_server_protocol::InjectedMessageRole::Assistant => (
+            "assistant".to_string(),
+            vec![ContentItem::OutputText { text: message.text }],
+        ),
+        codex_app_server_protocol::InjectedMessageRole::Developer => (
+            "developer".to_string(),
+            vec![ContentItem::InputText { text: message.text }],
+        ),
+        codex_app_server_protocol::InjectedMessageRole::User => (
+            "user".to_string(),
+            vec![ContentItem::InputText { text: message.text }],
+        ),
+    };
+
+    ResponseItem::Message {
+        id: None,
+        role,
+        content,
+        end_turn: None,
+        phase: None,
     }
 }
 

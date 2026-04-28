@@ -9,55 +9,95 @@ import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { InjectedMessage } from "./InjectedMessage";
 import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { TurnEnvironmentParams } from "./TurnEnvironmentParams";
 import type { UserInput } from "./UserInput";
 
-export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+export type TurnStartParams = { threadId: string, input: Array<UserInput>,
+/**
+ * Optional typed history messages to append immediately before this turn's
+ * user input if the turn starts successfully.
+ */
+prefixedMessages?: Array<InjectedMessage> | null,
+/**
  * Raw Responses API items to append immediately before the user input
  * when this starts a fresh turn.
  */
-prefixedItems?: Array<JsonValue> | null, /**
+prefixedItems?: Array<JsonValue> | null,
+/**
+ * Optional turn-scoped Responses API client metadata.
+ */
+responsesapiClientMetadata?: { [key in string]?: string } | null,
+/**
+ * Optional turn-scoped environments.
+ *
+ * Omitted uses the thread sticky environments. Empty disables
+ * environment access for this turn. Non-empty selects the first
+ * environment as the current turn environment for this turn.
+ */
+environments?: Array<TurnEnvironmentParams> | null,
+/**
  * Override the working directory for this turn and subsequent turns.
  */
-cwd?: string | null, /**
+cwd?: string | null,
+/**
  * Override the approval policy for this turn and subsequent turns.
  */
-approvalPolicy?: AskForApproval | null, /**
+approvalPolicy?: AskForApproval | null,
+/**
  * Override where approval requests are routed for review on this turn and
  * subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, /**
+approvalsReviewer?: ApprovalsReviewer | null,
+/**
  * Override the sandbox policy for this turn and subsequent turns.
  */
-sandboxPolicy?: SandboxPolicy | null, /**
+sandboxPolicy?: SandboxPolicy | null,
+/**
  * Override the full permissions profile for this turn and subsequent
  * turns. Cannot be combined with `sandboxPolicy`.
  */
-permissionProfile?: PermissionProfile | null, /**
+permissionProfile?: PermissionProfile | null,
+/**
  * Override the model for this turn and subsequent turns.
  */
-model?: string | null, /**
+model?: string | null,
+/**
  * Override the service tier for this turn and subsequent turns.
  */
-serviceTier?: ServiceTier | null | null, /**
+serviceTier?: ServiceTier | null | null,
+/**
  * Override the reasoning effort for this turn and subsequent turns.
  */
-effort?: ReasoningEffort | null, /**
+effort?: ReasoningEffort | null,
+/**
  * Override the reasoning summary for this turn and subsequent turns.
  */
-summary?: ReasoningSummary | null, /**
+summary?: ReasoningSummary | null,
+/**
  * Override the personality for this turn and subsequent turns.
  */
-personality?: Personality | null, /**
+personality?: Personality | null,
+/**
+ * Override the base instructions for this turn and subsequent turns.
+ */
+baseInstructions?: string | null,
+/**
+ * Override the developer instructions for this turn and subsequent turns.
+ */
+developerInstructions?: string | null,
+/**
  * Optional JSON Schema used to constrain the final assistant message for
  * this turn.
  */
-outputSchema?: JsonValue | null, /**
+outputSchema?: JsonValue | null,
+/**
  * EXPERIMENTAL - Set a pre-set collaboration mode.
  * Takes precedence over model, reasoning_effort, and developer instructions if set.
  *
  * For `collaboration_mode.settings.developer_instructions`, `null` means
  * "use the built-in instructions for the selected mode".
  */
-collaborationMode?: CollaborationMode | null};
+collaborationMode?: CollaborationMode | null, };

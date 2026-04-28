@@ -240,6 +240,21 @@ impl CodexThread {
         self.codex.session.validate_settings(&updates).await
     }
 
+    pub async fn update_instruction_overrides(
+        &self,
+        base_instructions: Option<String>,
+        developer_instructions: Option<String>,
+    ) -> ConstraintResult<()> {
+        self.codex
+            .session
+            .update_settings(SessionSettingsUpdate {
+                base_instructions,
+                developer_instructions,
+                ..Default::default()
+            })
+            .await
+    }
+
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await

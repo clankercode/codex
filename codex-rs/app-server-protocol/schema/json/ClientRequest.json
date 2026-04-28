@@ -1498,6 +1498,30 @@
       ],
       "type": "object"
     },
+    "InjectedMessage": {
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/InjectedMessageRole"
+        },
+        "text": {
+          "description": "Plain-text message content. Use `thread/inject_items` when you need raw Responses API item control or non-text content.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "InjectedMessageRole": {
+      "enum": [
+        "user",
+        "assistant",
+        "developer"
+      ],
+      "type": "string"
+    },
     "ListMcpServerStatusParams": {
       "properties": {
         "cursor": {
@@ -3406,6 +3430,139 @@
       ],
       "type": "string"
     },
+    "ThreadImportTranscriptParams": {
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ephemeral": {
+          "type": "boolean"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/definitions/InjectedMessage"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for the imported thread. Cannot be combined with `sandbox`."
+        },
+        "persistExtendedHistory": {
+          "default": false,
+          "type": "boolean"
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceThreadId": {
+          "description": "Optional source thread used to inherit defaults such as cwd and stored metadata. The imported transcript still creates a fresh thread id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "type": "object"
+    },
     "ThreadInjectItemsParams": {
       "properties": {
         "items": {
@@ -3419,6 +3576,25 @@
       },
       "required": [
         "items",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadInjectMessagesParams": {
+      "properties": {
+        "messages": {
+          "description": "Typed text messages to append to the thread's model-visible history.\n\nAssistant messages are stored as `output_text`; user and developer messages use `input_text`.",
+          "items": {
+            "$ref": "#/definitions/InjectedMessage"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
         "threadId"
       ],
       "type": "object"
@@ -4287,8 +4463,22 @@
           ],
           "description": "Override where approval requests are routed for review on this turn and subsequent turns."
         },
+        "baseInstructions": {
+          "description": "Override the base instructions for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerInstructions": {
+          "description": "Override the developer instructions for this turn and subsequent turns.",
           "type": [
             "string",
             "null"
@@ -4346,6 +4536,16 @@
         "prefixedItems": {
           "description": "Raw Responses API items to append immediately before the user input when this starts a fresh turn.",
           "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "prefixedMessages": {
+          "description": "Optional typed history messages to append immediately before this turn's user input if the turn starts successfully.",
+          "items": {
+            "$ref": "#/definitions/InjectedMessage"
+          },
           "type": [
             "array",
             "null"
@@ -4678,6 +4878,30 @@
         "params"
       ],
       "title": "Thread/forkRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/import_transcript"
+          ],
+          "title": "Thread/importTranscriptRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadImportTranscriptParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/importTranscriptRequest",
       "type": "object"
     },
     {
@@ -5039,6 +5263,31 @@
         "params"
       ],
       "title": "Thread/injectItemsRequest",
+      "type": "object"
+    },
+    {
+      "description": "Append typed text messages to the thread history without starting a user turn.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/inject_messages"
+          ],
+          "title": "Thread/injectMessagesRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadInjectMessagesParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/injectMessagesRequest",
       "type": "object"
     },
     {

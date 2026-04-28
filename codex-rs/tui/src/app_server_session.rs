@@ -562,6 +562,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
+                    prefixed_messages: None,
                     prefixed_items: if prefixed_items.is_empty() {
                         None
                     } else {
@@ -584,6 +585,8 @@ impl AppServerSession {
                     effort,
                     summary,
                     personality,
+                    base_instructions: None,
+                    developer_instructions: None,
                     output_schema,
                     collaboration_mode,
                 },

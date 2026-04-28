@@ -225,9 +225,10 @@ pub approvals_reviewer: Option<ApprovalsReviewer>
 and `build_turn_start_request(...)` maps that field to
 `TurnStartParams.approvals_reviewer`.
 
-No app-server protocol fields were added. The change uses existing
+The bridge-specific request builder changes use the existing
 `base_instructions` and `approvals_reviewer` support in the v2 app-server
-surface.
+surface. The broader x-thin app-server additions below do add v2 protocol
+surface area.
 
 ## Additional Relevant Changes
 
@@ -241,6 +242,9 @@ integrations:
   appended to thread history immediately before the turn's user input, but only
   if the turn starts successfully. Roles follow the same `user`/`assistant`/
   `developer` rule as `thread/inject_messages` (no `system`).
+- `turn/start` also accepts `prefixedItems`: raw Responses API items for callers
+  that need non-text or exact item control. `prefixedMessages` is the
+  typed-text convenience path; both forms are inserted before the user input.
 - `thread/inject_messages` appends typed text messages to thread history without
   constructing raw Responses API items. Supported roles are `user`,
   `assistant`, and `developer`.
@@ -260,12 +264,12 @@ integrations:
   importing connection’s subscription to the source thread after success so the
   existing idle-unload path can reclaim that old loaded thread if nothing else
   is using it.
-- `thread/update` is a new v2 method that updates session settings on an
+- `thread/update` is a v2 method that updates session settings on an
   existing thread without starting a turn. It accepts the same override fields
   as `turn/start` (cwd, approval policy, approvals reviewer, sandbox policy,
-  Windows sandbox level, model, reasoning effort, reasoning summary, service
-  tier, collaboration mode, personality, base instructions, developer
-  instructions). Omitted fields are left untouched.
+  permission profile, Windows sandbox level, model, reasoning effort, reasoning
+  summary, service tier, collaboration mode, personality, base instructions,
+  developer instructions). Omitted fields are left untouched.
 - `codex` CLI now exposes the thin-style minimal-context bundle behind
   `--text-provider`, with `--minimal-context` retained as an alias.
 
@@ -313,18 +317,18 @@ The crate also exports a shared `turn_client` module:
   effort. Setting a value updates Plan mode effort when in Plan mode, otherwise
   the session-level effort, and pushes an `override_turn_context` update with
   the new effort.
-- `/idletime` toggles a hidden idle-timing context injection for new turns and
-  supports a subcommand form for enable/disable.
+- `/idle-time [on|off|status]` toggles a hidden idle-timing context injection
+  for new turns and supports explicit status reporting.
 - `codex-rs/tui/src/idle_timing.rs` adds `IdleTimingState` and
   `PreparedIdleTimingSubmission`. When injection is enabled, the status line
   shows a compact "idle for X" marker that refreshes once per second and a
-  developer-role note is prepared for the next turn's `prefixedMessages`.
+  developer-role note is prepared for the next turn's prefixed context items.
 - `SlashCommand::Effort` and `SlashCommand::IdleTime` are registered in
   `slash_command.rs` with help text visible in the slash popup.
 
 ## Version
 
-- `codex-rs` workspace version is bumped to `0.122.0`. The new
+- `codex-rs` workspace version is currently `0.125.0-alpha.2`. The
   `turn-start-bridge` and `turn-start-bridge-core` crates are added to the
   workspace members list.
 
@@ -390,14 +394,30 @@ New or expanded test coverage includes:
 - Bridge request construction rejects duplicate CLI/XML system prompts.
 - XML prelude reading captures the startup system prompt and first messages.
 - Existing raw chunking and bridge controller behavior still pass.
+- Slash command lookup covers `/idle-time`, `/compact-with-mini`, and
+  `/effort`.
+- App-server v2 coverage verifies `turn/start` instruction overrides,
+  `prefixedMessages`, `thread/inject_messages`, and
+  `thread/import_transcript`.
 
 Commands run on this branch:
 
 ```bash
+cargo check -p codex-app-server-protocol -p codex-app-server -p codex-tui
 cargo test -p codex-turn-start-bridge-core
 cargo test -p codex-app-server-client
 cargo test -p codex-turn-start-bridge
+cargo test -p codex-app-server --test all thread_inject_items
+cargo test -p codex-app-server --test all thread_import_transcript
+cargo test -p codex-app-server --test all turn_start_instruction_overrides_persist_for_later_turns
+cargo test -p codex-app-server --test all turn_start_prefixed_messages_are_included_in_first_request
+cargo test -p codex-tui x_thin_slash_commands
 just fmt
+just write-app-server-schema
+just fix -p codex-app-server-protocol
+just fix -p codex-core
+just fix -p codex-app-server
+just fix -p codex-tui
 just fix -p codex-turn-start-bridge-core
 just fix -p codex-app-server-client
 just fix -p codex-turn-start-bridge
