@@ -1286,6 +1286,12 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        if self.composer.set_status_line_right(status_line) {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         if self.composer.set_status_line_enabled(enabled) {
             self.request_redraw();

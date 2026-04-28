@@ -140,22 +140,29 @@ impl ChatWidget {
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(/*status_line*/ None);
+            self.set_status_line_right(/*status_line*/ None);
             return;
         }
 
-        let mut parts = Vec::new();
+        let mut left_parts = Vec::new();
+        let mut right_line = None;
         for item in &selections.status_line_items {
             if let Some(value) = self.status_line_value_for_item(item) {
-                parts.push(value);
+                if *item == StatusLineItem::IdleTime {
+                    right_line = Some(Line::from(value));
+                } else {
+                    left_parts.push(value);
+                }
             }
         }
 
-        let line = if parts.is_empty() {
+        let line = if left_parts.is_empty() {
             None
         } else {
-            Some(Line::from(parts.join(" · ")))
+            Some(Line::from(left_parts.join(" · ")))
         };
         self.set_status_line(line);
+        self.set_status_line_right(right_line);
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.

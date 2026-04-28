@@ -272,6 +272,9 @@ integrations:
   developer instructions). Omitted fields are left untouched.
 - `codex` CLI now exposes the thin-style minimal-context bundle behind
   `--text-provider`, with `--minimal-context` retained as an alias.
+- `codex --x-thin-check` prints a JSON report showing whether the active
+  configuration matches the thin/text-provider override bundle and exits
+  non-zero when any expected override is missing.
 
 ## App-Server Stdio Transport
 
@@ -319,10 +322,15 @@ The crate also exports a shared `turn_client` module:
   the new effort.
 - `/idle-time [on|off|status]` toggles a hidden idle-timing context injection
   for new turns and supports explicit status reporting.
+- `/mcp-reload` reloads configured MCP servers via the app-server
+  `config/mcpServer/reload` path so config edits can be applied without
+  restarting the TUI.
 - `codex-rs/tui/src/idle_timing.rs` adds `IdleTimingState` and
   `PreparedIdleTimingSubmission`. When injection is enabled, the status line
-  shows a compact "idle for X" marker that refreshes once per second and a
-  developer-role note is prepared for the next turn's prefixed context items.
+  shows a compact idle/run marker that refreshes once per second. The idle/run
+  marker is rendered as the right-aligned status-line segment, so the left
+  status-line content truncates before hiding timing. A developer-role note is
+  prepared for the next turn's prefixed context items.
 - `SlashCommand::Effort` and `SlashCommand::IdleTime` are registered in
   `slash_command.rs` with help text visible in the slash popup.
 
@@ -394,8 +402,10 @@ New or expanded test coverage includes:
 - Bridge request construction rejects duplicate CLI/XML system prompts.
 - XML prelude reading captures the startup system prompt and first messages.
 - Existing raw chunking and bridge controller behavior still pass.
-- Slash command lookup covers `/idle-time`, `/compact-with-mini`, and
-  `/effort`.
+- Slash command lookup covers `/idle-time`, `/compact-with-mini`, `/effort`,
+  and `/mcp-reload`.
+- Footer snapshot coverage verifies the idle/run timing status-line segment
+  stays right-aligned and visible while the left status-line content truncates.
 - App-server v2 coverage verifies `turn/start` instruction overrides,
   `prefixedMessages`, `thread/inject_messages`, and
   `thread/import_transcript`.

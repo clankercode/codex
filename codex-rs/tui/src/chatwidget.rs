@@ -2167,6 +2167,11 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    /// Sets the right-aligned footer status-line segment.
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        self.bottom_pane.set_status_line_right(status_line);
+    }
+
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
     ///
     /// `ChatWidget` stays a pass-through here so `App` remains the owner of "which thread is the

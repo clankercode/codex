@@ -270,6 +270,10 @@ mod tests {
             SlashCommand::from_str("idle-time"),
             Ok(SlashCommand::IdleTime)
         );
+        assert_eq!(
+            SlashCommand::from_str("mcp-reload"),
+            Ok(SlashCommand::McpReload)
+        );
     }
 
     #[test]
@@ -288,6 +292,11 @@ mod tests {
             commands
                 .iter()
                 .any(|(name, command)| *name == "idle-time" && *command == SlashCommand::IdleTime)
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "mcp-reload" && *command == SlashCommand::McpReload)
         );
     }
 
