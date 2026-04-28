@@ -846,7 +846,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "Please continue.".to_string(),
@@ -886,7 +886,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "Please revise.".to_string(),
@@ -1034,7 +1034,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
     );
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "queued while compacting".to_string(),

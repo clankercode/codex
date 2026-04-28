@@ -1082,7 +1082,7 @@ async fn user_message_during_user_shell_command_is_queued_not_steered() {
     });
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "hi".to_string(),

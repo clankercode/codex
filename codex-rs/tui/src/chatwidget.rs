@@ -356,6 +356,8 @@ use crate::history_cell::HookCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
+use crate::idle_timing::IdleTimingState;
+use crate::idle_timing::PreparedIdleTimingSubmission;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 #[cfg(test)]
@@ -1047,6 +1049,9 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Per-thread idle timing state used for hidden timing injection and idle status rendering.
+    idle_timing_state: IdleTimingState,
+    turn_timing_idle_handle: Option<history_cell::TurnTimingIdleHandle>,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
@@ -1205,6 +1210,7 @@ pub(crate) struct ThreadInputState {
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
+    idle_timing_state: IdleTimingState,
 }
 
 impl From<String> for UserMessage {
@@ -2183,6 +2189,37 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    pub(crate) fn prepare_idle_timing_submission_for_turn_start(
+        &self,
+    ) -> Option<PreparedIdleTimingSubmission> {
+        self.idle_timing_state
+            .prepare_turn_start_submission(Local::now())
+    }
+
+    pub(crate) fn record_idle_timing_turn_start_user_message(&mut self) {
+        if let Some(handle) = self.turn_timing_idle_handle.take() {
+            handle.stop(Instant::now());
+        }
+        self.idle_timing_state
+            .record_turn_start_user_message(Instant::now());
+        self.refresh_status_line();
+    }
+
+    pub(crate) fn record_idle_timing_steer_user_message(&mut self) {
+        self.idle_timing_state
+            .record_steer_user_message(Instant::now());
+        self.refresh_status_line();
+    }
+
+    pub(crate) fn finish_idle_timing_turn_start_submission(
+        &mut self,
+        submission: PreparedIdleTimingSubmission,
+    ) {
+        if let Some(resume_note) = submission.resume_note {
+            self.add_info_message(resume_note, /*hint*/ None);
+        }
+    }
+
     /// Records that status-line setup was canceled.
     ///
     /// Cancellation is intentionally side-effect free for config state; the existing configuration
@@ -2358,6 +2395,8 @@ impl ChatWidget {
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.last_turn_id = None;
+        self.idle_timing_state = IdleTimingState::default();
+        self.turn_timing_idle_handle = None;
         self.thread_name = event.thread_name.clone();
         self.current_goal_status_indicator = None;
         self.current_goal_status = None;
@@ -2742,6 +2781,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.idle_timing_state.begin_turn(Instant::now());
         self.user_turn_pending_start = false;
         self.agent_turn_running = true;
         self.goal_status_active_turn_started_at = Some(Instant::now());
@@ -2838,6 +2878,18 @@ impl ChatWidget {
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
+            let current_model = self.current_model().to_string();
+            let completed_at = Local::now();
+            if let Some(duration) = self
+                .idle_timing_state
+                .complete_turn(&current_model, completed_at)
+                .filter(|duration| duration.as_secs() > 0)
+            {
+                let (row, handle) =
+                    history_cell::new_turn_timing_row(completed_at, duration, Instant::now());
+                self.turn_timing_idle_handle = Some(handle);
+                self.add_to_history(row);
+            }
             self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
@@ -3866,6 +3918,7 @@ impl ChatWidget {
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
+            idle_timing_state: self.idle_timing_state.clone(),
         })
     }
 
@@ -3875,6 +3928,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.idle_timing_state = input_state.idle_timing_state;
             self.goal_status_active_turn_started_at =
                 self.agent_turn_running.then_some(Instant::now());
             self.user_turn_pending_start = input_state.user_turn_pending_start;
@@ -5649,6 +5703,8 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            idle_timing_state: IdleTimingState::default(),
+            turn_timing_idle_handle: None,
             current_goal_status_indicator: None,
             current_goal_status: None,
             goal_status_active_turn_started_at: None,
@@ -6422,7 +6478,17 @@ impl ChatWidget {
         } else {
             Some(self.config.permissions.permission_profile())
         };
-        let op = AppCommand::user_turn(
+        let was_agent_turn_running = self.agent_turn_running;
+        let idle_timing_submission = (!was_agent_turn_running)
+            .then(|| self.prepare_idle_timing_submission_for_turn_start())
+            .flatten();
+        let prefixed_items = idle_timing_submission
+            .as_ref()
+            .map(PreparedIdleTimingSubmission::developer_message_item)
+            .into_iter()
+            .collect();
+        let op = AppCommand::user_turn_with_prefixed_items(
+            prefixed_items,
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
@@ -6439,6 +6505,14 @@ impl ChatWidget {
 
         if !self.submit_op(op.clone()) {
             return (false, None);
+        }
+        if let Some(submission) = idle_timing_submission {
+            self.finish_idle_timing_turn_start_submission(submission);
+        }
+        if was_agent_turn_running {
+            self.record_idle_timing_steer_user_message();
+        } else {
+            self.record_idle_timing_turn_start_user_message();
         }
         if render_in_history {
             self.user_turn_pending_start = true;
@@ -6863,7 +6937,9 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
+                self.idle_timing_state.reset_for_compaction(Local::now());
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
+                self.refresh_status_line();
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -7750,7 +7826,10 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => {}
+            EventMsg::ContextCompacted(_) => {
+                self.idle_timing_state.reset_for_compaction(Local::now());
+                self.refresh_status_line();
+            }
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -10675,6 +10754,20 @@ impl ChatWidget {
 
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effective_reasoning_effort()
+    }
+
+    fn set_idle_timing_injection_enabled(&mut self, enabled: bool) {
+        self.idle_timing_state.set_injection_enabled(enabled);
+        let status = if enabled { "enabled" } else { "disabled" };
+        self.add_info_message(
+            format!("Idle timing injection {status}."),
+            /*hint*/ None,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn idle_timing_injection_enabled(&self) -> bool {
+        self.idle_timing_state.injection_enabled()
     }
 
     #[cfg(test)]

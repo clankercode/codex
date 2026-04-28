@@ -307,6 +307,8 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        idle_timing_state: IdleTimingState::default(),
+        turn_timing_idle_handle: None,
         current_goal_status_indicator: None,
         current_goal_status: None,
         goal_status_active_turn_started_at: None,
@@ -324,7 +326,7 @@ pub(super) async fn make_chatwidget_manual(
 pub(super) fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     loop {
         match op_rx.try_recv() {
-            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(op @ (Op::UserTurn { .. } | Op::UserTurnWithPrefixedItems { .. })) => return op,
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
@@ -361,7 +363,10 @@ pub(super) fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedRec
 pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     while let Ok(op) = op_rx.try_recv() {
         assert!(
-            !matches!(op, Op::UserTurn { .. }),
+            !matches!(
+                op,
+                Op::UserTurn { .. } | Op::UserTurnWithPrefixedItems { .. }
+            ),
             "unexpected submit op: {op:?}"
         );
     }
@@ -372,7 +377,7 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
-fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
+pub(super) fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
     let additional_speed_tiers = if supports_fast_mode {
         vec![codex_protocol::openai_models::SPEED_TIER_FAST]
     } else {

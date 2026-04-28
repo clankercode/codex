@@ -251,7 +251,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
 
     assert_eq!(chat.pending_steers.len(), 2);
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "review follow-up one".to_string(),
@@ -261,7 +261,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         other => panic!("expected running-turn steer submit, got {other:?}"),
     }
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "review follow-up two".to_string(),
@@ -319,7 +319,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
     });
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "review follow-up one\nreview follow-up two".to_string(),
@@ -341,7 +341,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
     });
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "queued later".to_string(),
@@ -451,6 +451,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
         agent_turn_running: false,
+        idle_timing_state: IdleTimingState::default(),
     }));
 
     assert_eq!(

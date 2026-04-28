@@ -492,6 +492,7 @@ impl App {
                 Ok(true)
             }
             AppCommandView::UserTurn {
+                prefixed_items,
                 items,
                 cwd,
                 approval_policy,
@@ -575,6 +576,7 @@ impl App {
                     app_server
                         .turn_start(
                             thread_id,
+                            prefixed_items.to_vec(),
                             items.to_vec(),
                             cwd.clone(),
                             approval_policy,
@@ -608,7 +610,15 @@ impl App {
                 Ok(true)
             }
             AppCommandView::Compact => {
-                app_server.thread_compact_start(thread_id).await?;
+                app_server
+                    .thread_compact_start(thread_id, /*model*/ None)
+                    .await?;
+                Ok(true)
+            }
+            AppCommandView::CompactWithModel { model } => {
+                app_server
+                    .thread_compact_start(thread_id, Some(model.to_string()))
+                    .await?;
                 Ok(true)
             }
             AppCommandView::SetThreadName { name } => {

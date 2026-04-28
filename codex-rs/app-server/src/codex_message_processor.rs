@@ -3781,7 +3781,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadCompactStartParams,
     ) {
-        let ThreadCompactStartParams { thread_id } = params;
+        let ThreadCompactStartParams { thread_id, model } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -3791,10 +3791,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        match self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Compact)
-            .await
-        {
+        let op = match model {
+            Some(model) => Op::CompactWithModel { model },
+            None => Op::Compact,
+        };
+        match self.submit_core_op(&request_id, thread.as_ref(), op).await {
             Ok(_) => {
                 self.outgoing
                     .send_response(request_id, ThreadCompactStartResponse {})

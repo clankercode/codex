@@ -176,6 +176,55 @@ pub(super) async fn user_input_or_turn_inner(
                 None,
             )
         }
+        Op::UserTurnWithPrefixedItems {
+            prefixed_items,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            model,
+            effort,
+            summary,
+            service_tier,
+            final_output_json_schema,
+            items,
+            collaboration_mode,
+            personality,
+            environments,
+        } => {
+            let collaboration_mode = collaboration_mode.or_else(|| {
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: model.clone(),
+                        reasoning_effort: effort,
+                        developer_instructions: None,
+                    },
+                })
+            });
+            (
+                prefixed_items,
+                items,
+                SessionSettingsUpdate {
+                    cwd: Some(cwd),
+                    approval_policy: Some(approval_policy),
+                    approvals_reviewer,
+                    sandbox_policy: Some(sandbox_policy),
+                    permission_profile,
+                    windows_sandbox_level: None,
+                    collaboration_mode,
+                    reasoning_summary: summary,
+                    service_tier,
+                    final_output_json_schema: Some(final_output_json_schema),
+                    environments,
+                    personality,
+                    app_server_client_name: None,
+                    app_server_client_version: None,
+                },
+                None,
+            )
+        }
         Op::UserInputWithTurnContext {
             cwd,
             approval_policy,
@@ -700,7 +749,24 @@ pub async fn undo(sess: &Arc<Session>, sub_id: String) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    compact_with_model(sess, sub_id, /*model_override*/ None).await;
+}
+
+pub async fn compact_with_model(
+    sess: &Arc<Session>,
+    sub_id: String,
+    model_override: Option<String>,
+) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let compact_model = model_override.or_else(|| turn_context.config.compact_model.clone());
+    let turn_context = match compact_model {
+        Some(compact_model) if compact_model != turn_context.model_info.slug => Arc::new(
+            turn_context
+                .with_model(compact_model, &sess.services.models_manager)
+                .await,
+        ),
+        _ => turn_context,
+    };
 
     sess.spawn_task(
         Arc::clone(&turn_context),
@@ -1157,8 +1223,10 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. }
+                | Op::UserInputWithPrefixedItems { .. }
                 | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                | Op::UserTurn { .. }
+                | Op::UserTurnWithPrefixedItems { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -1220,6 +1288,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::CompactWithModel { model } => {
+                    compact_with_model(&sess, sub.id.clone(), Some(model)).await;
                     false
                 }
                 Op::DropMemories => {

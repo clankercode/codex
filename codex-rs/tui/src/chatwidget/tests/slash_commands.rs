@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 fn turn_complete_event(turn_id: &str, last_agent_message: Option<&str>) -> TurnCompleteEvent {
     serde_json::from_value(serde_json::json!({
@@ -30,6 +31,20 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
+fn assert_user_turn_text(op: Op, expected: &str) {
+    let items = match op {
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => items,
+        other => panic!("expected user turn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: expected.to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
 fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
         match op_rx.try_recv() {
@@ -41,6 +56,36 @@ fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) 
             }
         }
     }
+}
+
+fn set_mini_selection_test_catalog(chat: &mut ChatWidget, model_slugs: &[&str]) {
+    let models: Vec<ModelPreset> = ModelsResponse {
+        models: model_slugs
+            .iter()
+            .enumerate()
+            .map(|(priority, slug)| {
+                test_model_info(
+                    slug,
+                    i32::try_from(priority).expect("test priority fits i32"),
+                    /*supports_fast_mode*/ false,
+                )
+            })
+            .collect(),
+    }
+    .models
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        CollaborationModesConfig {
+            default_mode_request_user_input: chat
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
 }
 
 #[tokio::test]
@@ -106,6 +151,50 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
             .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact))),
         "expected queued /compact to submit compact op; events: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_prefers_current_model_mini() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4-mini", "gpt-5.5", "gpt-5.5-mini"]);
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.5-mini"
+    );
+    assert_eq!(chat.current_model(), "gpt-5.5");
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_falls_back_to_top_alphanumeric_mini() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(
+        &mut chat,
+        &["gpt-5.4-mini", "gpt-5.5", "gpt-5.3-codex-mini"],
+    );
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::CompactWithModel { model })) if model == "gpt-5.4-mini"
+    );
+}
+
+#[tokio::test]
+async fn slash_compact_with_mini_reports_missing_mini_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    set_mini_selection_test_catalog(&mut chat, &["gpt-5.4", "gpt-5.5"]);
+
+    chat.dispatch_command(SlashCommand::CompactWithMini);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert!(lines_to_single_string(&cells[0]).contains("No mini model"));
 }
 
 #[tokio::test]
@@ -248,16 +337,7 @@ async fn queued_empty_bang_shell_reports_help_when_dequeued_and_drains_next_inpu
         "expected delayed shell help, got {rendered:?}"
     );
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after help".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after empty shell command, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "hello after help");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -298,16 +378,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
     );
     end_exec(&mut chat, begin, "hi\n", "", /*exit_code*/ 0);
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after shell".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after shell completion, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "hello after shell");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -342,16 +413,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after menu".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after cancelling {command}, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "hello after menu");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -392,16 +454,7 @@ async fn queued_slash_menu_selection_drains_next_input() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after selection".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after permissions selection, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "hello after selection");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -452,16 +505,7 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
         }),
     });
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hello after rename".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued message after /rename, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "hello after rename");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -498,16 +542,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         "expected queued /rename to submit thread name; events: {events:?}"
     );
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "first after rename".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected first queued message after /rename, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "first after rename");
     assert_matches!(
         op_rx.try_recv(),
         Ok(Op::AddToHistory { text }) if text == "first after rename"
@@ -555,16 +590,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         msg: EventMsg::TurnComplete(turn_complete_event("turn-2", Some("done"))),
     });
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "second after rename".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected second queued message after turn complete, got {other:?}"),
-    }
+    assert_user_turn_text(next_submit_op(&mut op_rx), "second after rename");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -1172,6 +1198,100 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn idle_time_usage_error_slash_command_is_available_from_local_recall() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/idle-time maybe");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /idle-time [on|off|status]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time maybe");
+}
+
+#[tokio::test]
+async fn idle_time_command_is_available_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    submit_composer_text(&mut chat, "/idle-time off");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Idle timing injection disabled."),
+        "expected disable message, got: {rendered:?}"
+    );
+    assert!(!chat.idle_timing_injection_enabled());
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/idle-time off");
+}
+
+#[tokio::test]
+async fn idle_time_prefixes_next_turn_with_developer_timing_block() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let mode = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+    chat.submit_user_message_with_mode("first turn".to_string(), mode.clone());
+    assert_user_turn_text(next_submit_op(&mut op_rx), "first turn");
+    chat.on_task_started();
+    chat.on_task_complete(Some("done".to_string()), /*from_replay*/ false);
+
+    chat.submit_user_message_with_mode("next turn".to_string(), mode);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurnWithPrefixedItems {
+            prefixed_items,
+            items,
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "next turn".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            let [codex_protocol::models::ResponseItem::Message { role, content, .. }] =
+                prefixed_items.as_slice()
+            else {
+                panic!("expected one developer timing item, got {prefixed_items:?}");
+            };
+            assert_eq!(role, "developer");
+            let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice()
+            else {
+                panic!("expected timing text content, got {content:?}");
+            };
+            assert!(
+                text.contains("[timing]"),
+                "expected timing block, got {text:?}"
+            );
+            assert!(
+                text.contains("idle_for="),
+                "expected idle duration, got {text:?}"
+            );
+            assert!(
+                text.contains("last_turn="),
+                "expected last-turn duration, got {text:?}"
+            );
+        }
+        other => panic!("expected prefixed idle timing turn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1540,7 +1660,10 @@ async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
 
     assert_matches!(chat.pending_notification, None);
     assert!(chat.queued_user_messages.is_empty());
-    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+    assert_matches!(
+        next_submit_op(&mut op_rx),
+        Op::UserTurn { .. } | Op::UserTurnWithPrefixedItems { .. }
+    );
 }
 
 #[tokio::test]
@@ -2072,6 +2195,11 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            items,
+            service_tier: Some(Some(ServiceTier::Fast)),
+            ..
+        }
+        | Op::UserTurnWithPrefixedItems {
             items,
             service_tier: Some(Some(ServiceTier::Fast)),
             ..

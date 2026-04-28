@@ -697,7 +697,7 @@ async fn replayed_turn_complete_submits_restored_queued_follow_up() {
     );
 
     match next_user_turn_op(&mut new_op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "queued follow-up".to_string(),
@@ -940,7 +940,7 @@ async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up()
     );
 
     match next_user_turn_op(&mut new_op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
+        Op::UserTurn { items, .. } | Op::UserTurnWithPrefixedItems { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "queued follow-up".to_string(),
@@ -4121,7 +4121,10 @@ async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
 fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     let mut seen = Vec::new();
     while let Ok(op) = op_rx.try_recv() {
-        if matches!(op, Op::UserTurn { .. }) {
+        if matches!(
+            op,
+            Op::UserTurn { .. } | Op::UserTurnWithPrefixedItems { .. }
+        ) {
             return op;
         }
         seen.push(format!("{op:?}"));

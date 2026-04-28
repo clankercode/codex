@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Effort,
     Fast,
     Approvals,
     Permissions,
@@ -30,6 +31,8 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    CompactWithMini,
+    IdleTime,
     Plan,
     Goal,
     Collab,
@@ -78,6 +81,8 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::CompactWithMini => "summarize conversation using the latest mini model",
+            SlashCommand::IdleTime => "toggle hidden idle timing context for new turns",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -99,6 +104,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Effort => "set live reasoning effort for the current session",
             SlashCommand::Fast => {
                 "toggle Fast mode to enable fastest inference with increased plan usage"
             }
@@ -141,8 +147,10 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
+                | SlashCommand::Effort
                 | SlashCommand::Goal
                 | SlashCommand::Fast
+                | SlashCommand::IdleTime
                 | SlashCommand::Mcp
                 | SlashCommand::Side
                 | SlashCommand::Resume
@@ -166,8 +174,10 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::CompactWithMini
             // | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::Effort
             | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Approvals
@@ -199,7 +209,8 @@ impl SlashCommand {
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit
-            | SlashCommand::Side => true,
+            | SlashCommand::Side
+            | SlashCommand::IdleTime => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
@@ -236,6 +247,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::SlashCommand;
+    use super::built_in_slash_commands;
 
     #[test]
     fn stop_command_is_canonical_name() {
@@ -245,6 +257,38 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn x_thin_slash_commands_parse() {
+        assert_eq!(
+            SlashCommand::from_str("compact-with-mini"),
+            Ok(SlashCommand::CompactWithMini)
+        );
+        assert_eq!(SlashCommand::from_str("effort"), Ok(SlashCommand::Effort));
+        assert_eq!(
+            SlashCommand::from_str("idle-time"),
+            Ok(SlashCommand::IdleTime)
+        );
+    }
+
+    #[test]
+    fn x_thin_slash_commands_are_built_in() {
+        let commands = built_in_slash_commands();
+
+        assert!(commands.iter().any(|(name, command)| {
+            *name == "compact-with-mini" && *command == SlashCommand::CompactWithMini
+        }));
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "effort" && *command == SlashCommand::Effort)
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "idle-time" && *command == SlashCommand::IdleTime)
+        );
     }
 
     #[test]

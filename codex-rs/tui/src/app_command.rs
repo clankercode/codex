@@ -9,6 +9,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -40,6 +41,7 @@ pub(crate) enum AppCommandView<'a> {
         command: &'a str,
     },
     UserTurn {
+        prefixed_items: &'a [ResponseItem],
         items: &'a [UserInput],
         cwd: &'a PathBuf,
         approval_policy: AskForApproval,
@@ -99,6 +101,9 @@ pub(crate) enum AppCommandView<'a> {
         force_reload: bool,
     },
     Compact,
+    CompactWithModel {
+        model: &'a str,
+    },
     SetThreadName {
         name: &'a str,
     },
@@ -139,7 +144,8 @@ impl AppCommand {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn user_turn(
+    pub(crate) fn user_turn_with_prefixed_items(
+        prefixed_items: Vec<ResponseItem>,
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
@@ -153,7 +159,26 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
-        Self(Op::UserTurn {
+        if prefixed_items.is_empty() {
+            return Self(Op::UserTurn {
+                items,
+                environments: None,
+                cwd,
+                approval_policy,
+                approvals_reviewer: None,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+            });
+        }
+        Self(Op::UserTurnWithPrefixedItems {
+            prefixed_items,
             items,
             environments: None,
             cwd,
@@ -256,6 +281,10 @@ impl AppCommand {
         Self(Op::Compact)
     }
 
+    pub(crate) fn compact_with_model(model: String) -> Self {
+        Self(Op::CompactWithModel { model })
+    }
+
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self(Op::SetThreadName { name })
     }
@@ -307,6 +336,39 @@ impl AppCommand {
                 personality,
                 environments: _,
             } => AppCommandView::UserTurn {
+                prefixed_items: &[],
+                items,
+                cwd,
+                approval_policy: *approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort: *effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+            },
+            Op::UserTurnWithPrefixedItems {
+                prefixed_items,
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                environments: _,
+            } => AppCommandView::UserTurn {
+                prefixed_items,
                 items,
                 cwd,
                 approval_policy: *approval_policy,
@@ -384,6 +446,7 @@ impl AppCommand {
                 force_reload: *force_reload,
             },
             Op::Compact => AppCommandView::Compact,
+            Op::CompactWithModel { model } => AppCommandView::CompactWithModel { model },
             Op::SetThreadName { name } => AppCommandView::SetThreadName { name },
             Op::Shutdown => AppCommandView::Shutdown,
             Op::ThreadRollback { num_turns } => AppCommandView::ThreadRollback {

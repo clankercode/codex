@@ -730,6 +730,7 @@ mod tests {
 
     fn windows_sandbox_exec_request() -> ExecRequest {
         let sandbox_policy = SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: false,
         };
         ExecRequest::new(
@@ -835,6 +836,7 @@ mod tests {
             request_id: codex_app_server_protocol::RequestId::Integer(100),
         };
         let sandbox_policy = SandboxPolicy::ReadOnly {
+            access: Default::default(),
             network_access: false,
         };
 

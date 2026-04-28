@@ -535,6 +535,7 @@ impl AppServerSession {
     pub(crate) async fn turn_start(
         &mut self,
         thread_id: ThreadId,
+        prefixed_items: Vec<codex_protocol::models::ResponseItem>,
         items: Vec<codex_protocol::user_input::UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
@@ -561,7 +562,16 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
-                    prefixed_items: None,
+                    prefixed_items: if prefixed_items.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            prefixed_items
+                                .into_iter()
+                                .map(serde_json::to_value)
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )
+                    },
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
@@ -819,7 +829,11 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_compact_start(
+        &mut self,
+        thread_id: ThreadId,
+        model: Option<String>,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadCompactStartResponse = self
             .client
@@ -827,6 +841,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadCompactStartParams {
                     thread_id: thread_id.to_string(),
+                    model,
                 },
             })
             .await

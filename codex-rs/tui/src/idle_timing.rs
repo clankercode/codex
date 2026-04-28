@@ -3,6 +3,8 @@ use std::time::Instant;
 
 use chrono::DateTime;
 use chrono::Local;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 
 use crate::status_indicator_widget::fmt_elapsed_compact;
 
@@ -38,6 +40,20 @@ impl Default for IdleTimingState {
 pub(crate) struct PreparedIdleTimingSubmission {
     pub(crate) developer_message: String,
     pub(crate) resume_note: Option<String>,
+}
+
+impl PreparedIdleTimingSubmission {
+    pub(crate) fn developer_message_item(&self) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.developer_message.clone(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,22 +131,6 @@ impl IdleTimingState {
         turn_started_by_user_message.then_some(duration).flatten()
     }
 
-    pub(crate) fn restore_completed_turn(
-        &mut self,
-        model: &str,
-        completed_at: DateTime<Local>,
-        duration: Option<Duration>,
-    ) {
-        self.last_turn_duration = duration;
-        if duration.is_some() {
-            self.last_model_turn_completed_at = Some(completed_at);
-        }
-        self.model_at_last_model_turn = Some(model.to_string());
-        self.in_flight_turn_started_at = None;
-        self.last_steer_user_message_at = None;
-        self.current_turn_started_by_user_message = false;
-    }
-
     pub(crate) fn reset_for_compaction(&mut self, now: DateTime<Local>) {
         self.last_model_turn_completed_at = Some(now);
         self.model_at_last_model_turn = None;
@@ -187,10 +187,6 @@ impl IdleTimingState {
             text,
             refresh_in: STATUS_LINE_REFRESH_INTERVAL,
         })
-    }
-
-    pub(crate) fn needs_status_line_refresh(&self) -> bool {
-        self.in_flight_turn_started_at.is_some() || self.last_model_turn_completed_at.is_some()
     }
 
     fn idle_since_last_model_turn(&self, now: DateTime<Local>) -> Option<Duration> {

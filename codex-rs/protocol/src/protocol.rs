@@ -532,6 +532,75 @@ pub enum Op {
         environments: Option<Vec<TurnEnvironmentSelection>>,
     },
 
+    /// Similar to [`Op::UserTurn`], but prefixes a fresh turn with additional
+    /// already-typed model-visible history items.
+    UserTurnWithPrefixedItems {
+        /// Model-visible history items to append immediately before the user
+        /// message when this starts a fresh turn.
+        prefixed_items: Vec<ResponseItem>,
+
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+
+        /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
+        /// such as `local_shell`.
+        cwd: PathBuf,
+
+        /// Policy to use for command approval.
+        approval_policy: AskForApproval,
+
+        /// Reviewer to use for approval requests raised during this turn.
+        ///
+        /// When omitted, the session keeps the current setting
+        approvals_reviewer: Option<ApprovalsReviewer>,
+
+        /// Policy to use for tool calls such as `local_shell`.
+        sandbox_policy: SandboxPolicy,
+
+        /// Permission profile to use for tool calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
+        /// Must be a valid model slug for the configured client session
+        /// associated with this conversation.
+        model: String,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffortConfig>,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        ///
+        /// When omitted, the session keeps the current setting (which allows core to
+        /// fall back to the selected model's default on new sessions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<ReasoningSummaryConfig>,
+
+        /// Optional service tier override for this turn.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier for this turn, `Some(None)` to
+        /// explicitly clear the tier for this turn, or `None` to keep the existing
+        /// session preference.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service_tier: Option<Option<ServiceTier>>,
+
+        // The JSON schema to use for the final assistant message
+        final_output_json_schema: Option<Value>,
+
+        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// Takes precedence over model, effort, and developer instructions if set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<CollaborationMode>,
+
+        /// Optional personality override for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
+
+        /// Optional turn-local environment override.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    },
+
     /// User input with optional turn-context overrides.
     UserInputWithTurnContext {
         items: Vec<UserInput>,
@@ -874,6 +943,7 @@ impl Op {
             Self::UserInput { .. } => "user_input",
             Self::UserInputWithPrefixedItems { .. } => "user_input_with_prefixed_items",
             Self::UserTurn { .. } => "user_turn",
+            Self::UserTurnWithPrefixedItems { .. } => "user_turn_with_prefixed_items",
             Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
