@@ -147,12 +147,19 @@ impl ChatWidget {
         let mut left_parts = Vec::new();
         let mut right_line = None;
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(item) {
-                if *item == StatusLineItem::IdleTime {
-                    right_line = Some(Line::from(value));
-                } else {
-                    left_parts.push(value);
+            if *item == StatusLineItem::IdleTime {
+                if let Some(value) = self
+                    .idle_timing_state
+                    .status_line_value(self.current_model(), Local::now())
+                {
+                    right_line = Some(Line::from(value.text));
+                    self.frame_requester.schedule_frame_in(value.refresh_in);
                 }
+                continue;
+            }
+
+            if let Some(value) = self.status_line_value_for_item(item) {
+                left_parts.push(value);
             }
         }
 
@@ -260,6 +267,20 @@ impl ChatWidget {
         self.sync_status_surface_shared_state(&selections);
         self.refresh_status_line_from_selections(&selections);
         self.refresh_terminal_title_from_selections(&selections);
+    }
+
+    /// Recomputes the footer status line when it contains time-derived content.
+    pub(crate) fn refresh_status_line_for_time_tick(&mut self) {
+        let selections = self.status_surface_selections();
+        if !selections
+            .status_line_items
+            .contains(&StatusLineItem::IdleTime)
+        {
+            return;
+        }
+        self.warn_invalid_status_line_items_once(&selections.invalid_status_line_items);
+        self.sync_status_surface_shared_state(&selections);
+        self.refresh_status_line_from_selections(&selections);
     }
 
     /// Recomputes and emits the terminal title from config and runtime state.

@@ -2873,6 +2873,10 @@ impl TurnTimingIdleHandle {
         self.idle_stopped_after_secs
             .store(elapsed_secs, Ordering::Relaxed);
     }
+
+    pub(crate) fn is_updating(&self) -> bool {
+        self.idle_stopped_after_secs.load(Ordering::Relaxed) == TURN_TIMING_IDLE_ACTIVE
+    }
 }
 
 #[derive(Debug)]

@@ -2194,6 +2194,17 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    pub(crate) fn schedule_turn_timing_row_refresh(&self) {
+        if self
+            .turn_timing_idle_handle
+            .as_ref()
+            .is_some_and(history_cell::TurnTimingIdleHandle::is_updating)
+        {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_secs(1));
+        }
+    }
+
     pub(crate) fn prepare_idle_timing_submission_for_turn_start(
         &self,
     ) -> Option<PreparedIdleTimingSubmission> {
@@ -2893,7 +2904,10 @@ impl ChatWidget {
                 let (row, handle) =
                     history_cell::new_turn_timing_row(completed_at, duration, Instant::now());
                 self.turn_timing_idle_handle = Some(handle);
-                self.add_to_history(row);
+                self.flush_active_cell();
+                self.active_cell = Some(Box::new(row));
+                self.bump_active_cell_revision();
+                self.schedule_turn_timing_row_refresh();
             }
             self.request_status_line_branch_refresh();
         }
@@ -4991,7 +5005,9 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
+        self.refresh_status_line_for_time_tick();
         self.refresh_goal_status_indicator_for_time_tick();
+        self.schedule_turn_timing_row_refresh();
         if self.should_animate_terminal_title_spinner() {
             self.refresh_terminal_title();
         }

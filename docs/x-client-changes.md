@@ -61,6 +61,9 @@ The new bridge sideband flags are Unix-only in v1:
 For fd lifecycle and ownership guidance when embedding these sidebands, see
 [`x-fd-sideband-guide.md`](./x-fd-sideband-guide.md).
 
+For the implementation audit checklist across `x-todo.txt`, `x-todo.txt.save`,
+and these x-thin docs, see [`x-feature-checklist.md`](./x-feature-checklist.md).
+
 `codex` TUI now also accepts:
 
 ```bash
@@ -404,6 +407,8 @@ New or expanded test coverage includes:
 - Existing raw chunking and bridge controller behavior still pass.
 - Slash command lookup covers `/idle-time`, `/compact-with-mini`, `/effort`,
   and `/mcp-reload`.
+- Status-line coverage verifies `/idle-time` schedules its own 1-second redraw
+  instead of relying on unrelated UI activity.
 - Footer snapshot coverage verifies the idle/run timing status-line segment
   stays right-aligned and visible while the left status-line content truncates.
 - App-server v2 coverage verifies `turn/start` instruction overrides,

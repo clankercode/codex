@@ -1295,6 +1295,88 @@ async fn status_line_context_used_renders_labeled_percent() {
 }
 
 #[tokio::test]
+async fn status_line_idle_time_schedules_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (frame_requester, mut frame_rx) = crate::tui::FrameRequester::test_probe();
+    chat.frame_requester = frame_requester;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["idle-time".to_string()]);
+    let current_model = chat.current_model().to_string();
+    chat.idle_timing_state
+        .complete_turn(&current_model, chrono::Local::now());
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Idle 0s".to_string()));
+    assert!(
+        frame_rx.try_recv().is_ok(),
+        "idle status line should schedule its next refresh"
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "idle-time should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn pre_draw_tick_refreshes_idle_time_status_line() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (frame_requester, mut frame_rx) = crate::tui::FrameRequester::test_probe();
+    chat.frame_requester = frame_requester;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["idle-time".to_string()]);
+    let current_model = chat.current_model().to_string();
+    chat.idle_timing_state.complete_turn(
+        &current_model,
+        chrono::Local::now() - chrono::Duration::seconds(2),
+    );
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Idle 2s".to_string()));
+    assert!(frame_rx.try_recv().is_ok());
+
+    chat.idle_timing_state.complete_turn(
+        &current_model,
+        chrono::Local::now() - chrono::Duration::seconds(5),
+    );
+    chat.pre_draw_tick();
+
+    assert_eq!(status_line_text(&chat), Some("Idle 5s".to_string()));
+    assert!(
+        frame_rx.try_recv().is_ok(),
+        "refreshed idle status line should schedule the next tick"
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "idle-time should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn completed_turn_timing_row_stays_live_until_next_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (frame_requester, mut frame_rx) = crate::tui::FrameRequester::test_probe();
+    chat.frame_requester = frame_requester;
+    chat.idle_timing_state.record_turn_start_user_message(
+        std::time::Instant::now() - std::time::Duration::from_secs(13),
+    );
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    let active_cell = chat
+        .active_cell
+        .as_ref()
+        .expect("turn timing row should remain active");
+    let rendered = lines_to_single_string(&active_cell.display_lines(/*width*/ 80));
+    assert!(rendered.contains("Δt 13s"), "rendered row: {rendered}");
+    assert!(rendered.contains("Idle for 0s"), "rendered row: {rendered}");
+    assert!(
+        frame_rx.try_recv().is_ok(),
+        "live turn timing row should schedule its next refresh"
+    );
+}
+
+#[tokio::test]
 async fn status_line_context_remaining_renders_labeled_percent() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
